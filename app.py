@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 from PIL import Image
 import plotly.express as px
+from datetime import datetime, timedelta
 
 # --- ULTRA MODERN CSS & HTML INTERFACE ---
 def load_css():
@@ -17,7 +18,6 @@ def load_css():
     html, body, [class*="css"] {
         font-family: 'Inter', sans-serif;
     }
-    /* Glassmorphism Background */
     .stApp {
         background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
     }
@@ -61,6 +61,10 @@ def load_css():
         border: 1px solid rgba(255, 255, 255, 0.5);
         margin-bottom: 20px;
     }
+    /* Styling the dataframe grid */
+    .stDataFrame {
+        font-size: 14px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -68,26 +72,40 @@ def load_css():
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-def init_data():
+def ensure_csv_structure():
     os.makedirs("data", exist_ok=True)
     os.makedirs("qr_codes", exist_ok=True)
     
-    # Creating Empty files if not exist
+    # Users CSV with new columns (Profession & Class)
+    user_cols = ["username", "password_hash", "role", "name", "email", "phone", "profession", "class_name", "created_by"]
     if not os.path.exists("data/users.csv"):
-        df = pd.DataFrame(columns=["username", "password_hash", "role", "name", "email", "phone", "created_by"])
+        pd.DataFrame(columns=user_cols).to_csv("data/users.csv", index=False)
+    else:
+        # Fix missing columns if user upgrades the app
+        df = pd.read_csv("data/users.csv")
+        for col in user_cols:
+            if col not in df.columns:
+                df[col] = "" 
         df.to_csv("data/users.csv", index=False)
         
+    # Attendance CSV with Check-in / Check-out / Status
+    att_cols = ["username", "date", "checkin_time", "checkout_time", "status", "method"]
     if not os.path.exists("data/attendance.csv"):
-        df = pd.DataFrame(columns=["username", "date", "time", "method", "status"])
+        pd.DataFrame(columns=att_cols).to_csv("data/attendance.csv", index=False)
+    else:
+        df = pd.read_csv("data/attendance.csv")
+        for col in att_cols:
+            if col not in df.columns:
+                df[col] = ""
         df.to_csv("data/attendance.csv", index=False)
-    
-    # Auto-create Head Teacher (Najeeb) on first run
+
+    # Auto-create Head Teacher Najeeb
     users = load_users()
     if "najeeb" not in users["username"].values:
         new_row = pd.DataFrame([[
             "najeeb", hash_password("inajeeb123"), "HeadTeacher", 
-            "Mr. Najeeb", "najeeb@university.edu", "+92 300 0000000", "system"
-        ]], columns=["username", "password_hash", "role", "name", "email", "phone", "created_by"])
+            "Mr. Najeeb", "najeeb@university.edu", "+92 300 0000000", "Admin", "All", "system"
+        ]], columns=["username", "password_hash", "role", "name", "email", "phone", "profession", "class_name", "created_by"])
         users = pd.concat([users, new_row], ignore_index=True)
         save_users(users)
 
@@ -110,8 +128,8 @@ def generate_qr(username):
     img.save(path)
     return path
 
-# --- CLOUD VERSION: QR CODE ATTENDANCE ---
-def mark_attendance_qr(qr_upload, username):
+# --- CLOUD VERSION: QR CODE ATTENDANCE (CHECK-IN, CHECK-OUT, LEAVE) ---
+def mark_attendance_qr(qr_upload, username, action):
     try:
         img = Image.open(qr_upload)
         img_np = np.array(img)
@@ -119,31 +137,87 @@ def mark_attendance_qr(qr_upload, username):
         data, _, _ = detector.detectAndDecode(img_np)
         
         if data and data.strip() == username.strip():
-            now = time.localtime()
-            date = time.strftime("%Y-%m-%d", now)
-            t = time.strftime("%H:%M:%S", now)
-            
+            now = datetime.now()
+            date = now.strftime("%Y-%m-%d")
+            time_str = now.strftime("%H:%M:%S")
             df = load_attendance()
-            new_record = pd.DataFrame([[username, date, t, "QR Code (Cloud)", "Present"]], 
-                                     columns=["username", "date", "time", "method", "status"])
-            df = pd.concat([df, new_record], ignore_index=True)
-            save_attendance(df)
-            return True, "Attendance Marked Successfully via QR Code!"
+            today_record = df[(df["username"] == username) & (df["date"] == date)]
+            
+            if action == "Check In":
+                if not today_record.empty and today_record.iloc[0]["checkin_time"] != "":
+                    return False, "You have already Checked In today!"
+                new_record = pd.DataFrame([[username, date, time_str, "", "Present", "QR Code"]], 
+                                         columns=["username", "date", "checkin_time", "checkout_time", "status", "method"])
+                df = pd.concat([df, new_record], ignore_index=True)
+                save_attendance(df)
+                return True, f"Check In Successful at {time_str}!"
+
+            elif action == "Check Out":
+                if today_record.empty or today_record.iloc[0]["checkin_time"] == "":
+                    return False, "You haven't Checked In today!"
+                if today_record.iloc[0]["checkout_time"] != "":
+                    return False, "You have already Checked Out today!"
+                
+                # Update the Check-Out time
+                df.loc[(df["username"] == username) & (df["date"] == date), "checkout_time"] = time_str
+                save_attendance(df)
+                return True, f"Check Out Successful at {time_str}!"
+
+            elif action == "Mark Leave":
+                if not today_record.empty:
+                    return False, "Attendance already marked for today!"
+                new_record = pd.DataFrame([[username, date, time_str, time_str, "Leave", "QR Code"]], 
+                                         columns=["username", "date", "checkin_time", "checkout_time", "status", "method"])
+                df = pd.concat([df, new_record], ignore_index=True)
+                save_attendance(df)
+                return True, "Leave Marked Successfully!"
+                
         else:
-            return False, "Invalid QR Code for this student!"
+            return False, "Invalid QR Code for this user!"
     except Exception as e:
         return False, f"Error processing QR Code: {str(e)}"
+
+# --- CALENDAR GRID VIEW GENERATOR ---
+def get_attendance_grid(usernames, days=7):
+    """Generates a grid similar to the screenshot (Rows=Users, Cols=Dates)"""
+    df_att = load_attendance()
+    today = datetime.now().date()
+    date_list = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days-1, -1, -1)]
+    
+    grid_data = []
+    for user in usernames:
+        row = {"username": user}
+        for d in date_list:
+            record = df_att[(df_att["username"] == user) & (df_att["date"] == d)]
+            if record.empty:
+                row[d] = "A" # Absent
+            else:
+                r = record.iloc[0]
+                if r["status"] == "Leave":
+                    row[d] = "L"
+                else:
+                    # Show P with Check-in/out times if available
+                    checkin = r["checkin_time"] if pd.notna(r["checkin_time"]) else ""
+                    checkout = r["checkout_time"] if pd.notna(r["checkout_time"]) else ""
+                    if checkout:
+                        row[d] = f"P ({checkin}-{checkout})"
+                    else:
+                        row[d] = f"P ({checkin})"
+        grid_data.append(row)
+    
+    grid_df = pd.DataFrame(grid_data)
+    return grid_df, date_list
 
 # --- STREAMLIT APP LOGIC ---
 def main():
     load_css()
-    init_data()
+    ensure_csv_structure()
     
     # Sidebar Menu
     st.sidebar.title("📚 AMS Portal")
     
     if "logged_in" not in st.session_state:
-        menu = st.sidebar.selectbox("Select Option", ["Login", "Register Student"])
+        menu = st.sidebar.selectbox("Select Option", ["Login", "Register Student", "Register Teacher"])
     else:
         menu = st.sidebar.selectbox("Select Option", ["Dashboard", "Logout"])
     
@@ -170,6 +244,7 @@ def main():
                             st.session_state["username"] = username
                             st.session_state["role"] = user.iloc[0]['role']
                             st.session_state["user_name"] = user.iloc[0]['name']
+                            st.session_state["class_name"] = user.iloc[0]['class_name']
                             st.success(f"Welcome back, {user.iloc[0]['name']}!")
                             st.rerun()
                         else:
@@ -186,8 +261,9 @@ def main():
                     st.subheader("Register Yourself")
                     name = st.text_input("Full Name")
                     username = st.text_input("Desired Username")
-                    phone = st.text_input("Phone Number")
                     email = st.text_input("Email")
+                    phone = st.text_input("Phone Number")
+                    class_name = st.text_input("Your Class/Batch (e.g. CS-2026)")
                     password = st.text_input("Create Password", type="password")
                     submit_reg = st.form_submit_button("Register as Student")
                     st.markdown('</div>', unsafe_allow_html=True)
@@ -195,33 +271,69 @@ def main():
                     if submit_reg:
                         users = load_users()
                         if username in users["username"].values:
-                            st.error("Username already taken! Please choose another.")
+                            st.error("Username already taken!")
                         elif not username or not password:
                             st.error("Username and Password are required.")
                         else:
                             new_row = pd.DataFrame([[
                                 username, hash_password(password), "Student", 
-                                name, email, phone, "self"
-                            ]], columns=["username", "password_hash", "role", "name", "email", "phone", "created_by"])
-                            
+                                name, email, phone, "Student", class_name, "self"
+                            ]], columns=["username", "password_hash", "role", "name", "email", "phone", "profession", "class_name", "created_by"])
                             users = pd.concat([users, new_row], ignore_index=True)
                             save_users(users)
                             generate_qr(username)
                             st.success(f"Registration Successful for {name}! You can now login.")
 
+    # ---------------- TEACHER SELF REGISTRATION ----------------
+    elif menu == "Register Teacher":
+        st.markdown('<div class="main-header"><h1>📝 Teacher Registration</h1></div>', unsafe_allow_html=True)
+        with st.container():
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                with st.form("teacher_reg"):
+                    st.markdown('<div class="card">', unsafe_allow_html=True)
+                    st.subheader("Register as Teacher")
+                    name = st.text_input("Full Name")
+                    username = st.text_input("Desired Username")
+                    profession = st.text_input("Your Profession (e.g. Math Teacher)")
+                    email = st.text_input("Email")
+                    phone = st.text_input("Phone Number")
+                    class_name = st.text_input("Your Class/Batch (e.g. CS-2026)")
+                    password = st.text_input("Create Password", type="password")
+                    submit_reg = st.form_submit_button("Register as Teacher")
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    if submit_reg:
+                        users = load_users()
+                        if username in users["username"].values:
+                            st.error("Username already taken!")
+                        elif not username or not password:
+                            st.error("Username and Password are required.")
+                        else:
+                            new_row = pd.DataFrame([[
+                                username, hash_password(password), "Teacher", 
+                                name, email, phone, profession, class_name, "self"
+                            ]], columns=["username", "password_hash", "role", "name", "email", "phone", "profession", "class_name", "created_by"])
+                            users = pd.concat([users, new_row], ignore_index=True)
+                            save_users(users)
+                            generate_qr(username)
+                            st.success(f"Teacher {name} registered successfully! You can now login.")
+
     # ---------------- DASHBOARD (ROLE BASED) ----------------
     elif menu == "Dashboard" and "logged_in" in st.session_state:
         role = st.session_state["role"]
+        current_username = st.session_state["username"]
+        current_class = st.session_state["class_name"]
         
+        if st.sidebar.button("🚪 Logout"):
+            for key in list(st.session_state.keys()): del st.session_state[key]
+            st.rerun()
+            
         # --- HEAD TEACHER DASHBOARD (NAJEEB) ---
         if role == "HeadTeacher":
             st.markdown(f'<div class="main-header"><h1>👑 Head Teacher Dashboard</h1><p>Welcome, {st.session_state["user_name"]}</p></div>', unsafe_allow_html=True)
             
-            if st.sidebar.button("🚪 Logout"):
-                for key in list(st.session_state.keys()): del st.session_state[key]
-                st.rerun()
-            
-            tab1, tab2 = st.tabs(["➕ Add New Teacher", "📋 All Users Data"])
+            tab1, tab2 = st.tabs(["➕ Add New Teacher", "📊 All System Attendance"])
             
             with tab1:
                 with st.form("add_teacher"):
@@ -231,6 +343,8 @@ def main():
                     t_pass = st.text_input("Teacher Password", type="password")
                     t_email = st.text_input("Teacher Email")
                     t_phone = st.text_input("Teacher Phone")
+                    t_prof = st.text_input("Teacher Profession")
+                    t_class = st.text_input("Teacher's Class/Batch")
                     
                     if st.form_submit_button("Add Teacher"):
                         users = load_users()
@@ -239,81 +353,86 @@ def main():
                         else:
                             new_row = pd.DataFrame([[
                                 t_username, hash_password(t_pass), "Teacher", 
-                                t_name, t_email, t_phone, "najeeb"
-                            ]], columns=["username", "password_hash", "role", "name", "email", "phone", "created_by"])
+                                t_name, t_email, t_phone, t_prof, t_class, "najeeb"
+                            ]], columns=["username", "password_hash", "role", "name", "email", "phone", "profession", "class_name", "created_by"])
                             users = pd.concat([users, new_row], ignore_index=True)
                             save_users(users)
                             generate_qr(t_username)
                             st.success(f"Teacher {t_name} added successfully!")
             
             with tab2:
-                st.dataframe(load_users(), use_container_width=True)
+                all_users = load_users()
+                all_usernames = all_users["username"].tolist()
+                grid_df, date_cols = get_attendance_grid(all_usernames, days=30)
+                st.subheader("Attendance Calendar (Last 30 Days)")
+                # Color formatting
+                st.dataframe(grid_df.style.applymap(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
 
         # --- TEACHER DASHBOARD ---
         elif role == "Teacher":
             st.markdown(f'<div class="main-header"><h1>🧑‍🏫 Teacher Dashboard</h1><p>Welcome, {st.session_state["user_name"]}</p></div>', unsafe_allow_html=True)
             
-            if st.sidebar.button("🚪 Logout"):
-                for key in list(st.session_state.keys()): del st.session_state[key]
-                st.rerun()
-                
-            tab1, tab2 = st.tabs(["📊 Analytics", "📋 Attendance Records"])
+            # Teacher can see his OWN attendance AND students in his class
+            users_df = load_users()
+            # Fetch students of this class
+            class_students = users_df[(users_df["class_name"] == current_class) & (users_df["role"] == "Student")]["username"].tolist()
+            # Allow teacher to view his own data + class students
+            view_usernames = [current_username] + class_students
+            
+            tab1, tab2, tab3 = st.tabs(["📸 Mark Attendance", "📊 Class Attendance (Grid)", "📋 Details"])
             
             with tab1:
-                st.subheader("Class Attendance Analytics")
-                df = load_attendance()
-                if df.empty:
-                    st.info("No attendance records found yet.")
-                else:
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        fig = px.pie(df, names='username', title='Attendance Distribution', hole=0.4, color_discrete_sequence=px.colors.sequential.Bluyl)
-                        st.plotly_chart(fig, use_container_width=True)
-                    with col2:
-                        fig_bar = px.bar(df.groupby('username').count().reset_index(), x='username', y='date', title='Total Count', color='username', text_auto=True)
-                        st.plotly_chart(fig_bar, use_container_width=True)
-            
-            with tab2:
-                st.subheader("All Students Attendance Records")
-                st.dataframe(load_attendance(), use_container_width=True)
-
-        # --- STUDENT DASHBOARD ---
-        elif role == "Student":
-            username = st.session_state["username"]
-            st.markdown(f'<div class="main-header"><h1>🧑‍🎓 Student Dashboard</h1><p>Welcome, {st.session_state["user_name"]}</p></div>', unsafe_allow_html=True)
-            
-            if st.sidebar.button("🚪 Logout"):
-                for key in list(st.session_state.keys()): del st.session_state[key]
-                st.rerun()
-                
-            tab1, tab2, tab3 = st.tabs(["Mark Attendance", "My Stats", "My QR"])
-            
-            with tab1:
-                st.subheader("📸 Mark Attendance via QR Code")
-                qr_img = st.file_uploader("Upload QR Code", type=['png', 'jpg', 'jpeg'])
-                if qr_img is not None and st.button("✅ Mark Attendance"):
-                    status, msg = mark_attendance_qr(qr_img, username)
+                st.subheader("Mark Your Attendance via QR Code")
+                action = st.radio("Select Action:", ["Check In", "Check Out", "Mark Leave"], horizontal=True)
+                qr_img = st.file_uploader("Upload Your QR Code", type=['png', 'jpg', 'jpeg'])
+                if qr_img is not None and st.button("✅ Submit Attendance"):
+                    status, msg = mark_attendance_qr(qr_img, current_username, action)
                     if status: st.success(msg) 
                     else: st.error(msg)
             
             with tab2:
-                st.subheader("📈 My Performance")
+                st.subheader(f"Grid View: My Class ({current_class})")
+                grid_df, date_cols = get_attendance_grid(view_usernames, days=30)
+                # Apply color formatting similar to screenshot
+                st.dataframe(grid_df.style.applymap(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
+            
+            with tab3:
+                st.subheader("Detailed Attendance Records")
+                df_att = load_attendance()
+                st.dataframe(df_att[df_att["username"].isin(view_usernames)], use_container_width=True)
+
+        # --- STUDENT DASHBOARD ---
+        elif role == "Student":
+            st.markdown(f'<div class="main-header"><h1>🧑‍🎓 Student Dashboard</h1><p>Welcome, {st.session_state["user_name"]}</p></div>', unsafe_allow_html=True)
+            
+            tab1, tab2, tab3 = st.tabs(["Mark Attendance", "My Statistics", "My QR"])
+            
+            with tab1:
+                st.subheader("Mark Attendance via QR Code")
+                action = st.radio("Select Action:", ["Check In", "Check Out", "Mark Leave"], horizontal=True)
+                qr_img = st.file_uploader("Upload QR Code", type=['png', 'jpg', 'jpeg'])
+                if qr_img is not None and st.button("✅ Submit Attendance"):
+                    status, msg = mark_attendance_qr(qr_img, current_username, action)
+                    if status: st.success(msg) 
+                    else: st.error(msg)
+            
+            with tab2:
+                st.subheader("📈 My Performance (Grid View)")
+                grid_df, date_cols = get_attendance_grid([current_username], days=30)
+                st.dataframe(grid_df.style.applymap(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
+                
+                st.subheader("Detailed Check-In/Out Logs")
                 df = load_attendance()
-                my_data = df[df["username"] == username]
-                if my_data.empty:
-                    st.info("No records yet.")
-                else:
-                    fig = px.line(my_data, x='date', y='time', markers=True, title=f'Attendance History')
-                    st.plotly_chart(fig, use_container_width=True)
-                    st.metric(label="Total Present Days", value=len(my_data))
+                my_data = df[df["username"] == current_username]
+                st.dataframe(my_data, use_container_width=True)
             
             with tab3:
                 st.subheader("🆔 My ID QR Code")
-                qr_path = f"qr_codes/{username}.png"
+                qr_path = f"qr_codes/{current_username}.png"
                 if os.path.exists(qr_path):
                     st.image(qr_path, caption="Scan to Mark Attendance", width=200)
                     with open(qr_path, "rb") as f:
-                        st.download_button("⬇️ Download QR", f, file_name=f"{username}_qr.png")
+                        st.download_button("⬇️ Download QR", f, file_name=f"{current_username}_qr.png")
                 else:
                     st.warning("QR Code not found.")
 
