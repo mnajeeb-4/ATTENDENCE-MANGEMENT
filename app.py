@@ -76,19 +76,18 @@ def ensure_csv_structure():
     os.makedirs("data", exist_ok=True)
     os.makedirs("qr_codes", exist_ok=True)
     
-    # Users CSV with new columns (Profession & Class)
+    # Users CSV
     user_cols = ["username", "password_hash", "role", "name", "email", "phone", "profession", "class_name", "created_by"]
     if not os.path.exists("data/users.csv"):
         pd.DataFrame(columns=user_cols).to_csv("data/users.csv", index=False)
     else:
-        # Fix missing columns if user upgrades the app
         df = pd.read_csv("data/users.csv")
         for col in user_cols:
             if col not in df.columns:
                 df[col] = "" 
         df.to_csv("data/users.csv", index=False)
         
-    # Attendance CSV with Check-in / Check-out / Status
+    # Attendance CSV
     att_cols = ["username", "date", "checkin_time", "checkout_time", "status", "method"]
     if not os.path.exists("data/attendance.csv"):
         pd.DataFrame(columns=att_cols).to_csv("data/attendance.csv", index=False)
@@ -196,7 +195,6 @@ def get_attendance_grid(usernames, days=7):
                 if r["status"] == "Leave":
                     row[d] = "L"
                 else:
-                    # Show P with Check-in/out times if available
                     checkin = r["checkin_time"] if pd.notna(r["checkin_time"]) else ""
                     checkout = r["checkout_time"] if pd.notna(r["checkout_time"]) else ""
                     if checkout:
@@ -217,7 +215,8 @@ def main():
     st.sidebar.title("📚 AMS Portal")
     
     if "logged_in" not in st.session_state:
-        menu = st.sidebar.selectbox("Select Option", ["Login", "Register Student", "Register Teacher"])
+        # Updated: Removed "Register Teacher" from public menu. Only Najeeb can add Teachers.
+        menu = st.sidebar.selectbox("Select Option", ["Login", "Register Student"])
     else:
         menu = st.sidebar.selectbox("Select Option", ["Dashboard", "Logout"])
     
@@ -250,7 +249,7 @@ def main():
                         else:
                             st.error("Invalid Username or Password!")
 
-    # ---------------- STUDENT SELF REGISTRATION ----------------
+    # ---------------- STUDENT SELF REGISTRATION (ONLY) ----------------
     elif menu == "Register Student":
         st.markdown('<div class="main-header"><h1>📝 Student Registration</h1></div>', unsafe_allow_html=True)
         with st.container():
@@ -283,41 +282,6 @@ def main():
                             save_users(users)
                             generate_qr(username)
                             st.success(f"Registration Successful for {name}! You can now login.")
-
-    # ---------------- TEACHER SELF REGISTRATION ----------------
-    elif menu == "Register Teacher":
-        st.markdown('<div class="main-header"><h1>📝 Teacher Registration</h1></div>', unsafe_allow_html=True)
-        with st.container():
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                with st.form("teacher_reg"):
-                    st.markdown('<div class="card">', unsafe_allow_html=True)
-                    st.subheader("Register as Teacher")
-                    name = st.text_input("Full Name")
-                    username = st.text_input("Desired Username")
-                    profession = st.text_input("Your Profession (e.g. Math Teacher)")
-                    email = st.text_input("Email")
-                    phone = st.text_input("Phone Number")
-                    class_name = st.text_input("Your Class/Batch (e.g. CS-2026)")
-                    password = st.text_input("Create Password", type="password")
-                    submit_reg = st.form_submit_button("Register as Teacher")
-                    st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    if submit_reg:
-                        users = load_users()
-                        if username in users["username"].values:
-                            st.error("Username already taken!")
-                        elif not username or not password:
-                            st.error("Username and Password are required.")
-                        else:
-                            new_row = pd.DataFrame([[
-                                username, hash_password(password), "Teacher", 
-                                name, email, phone, profession, class_name, "self"
-                            ]], columns=["username", "password_hash", "role", "name", "email", "phone", "profession", "class_name", "created_by"])
-                            users = pd.concat([users, new_row], ignore_index=True)
-                            save_users(users)
-                            generate_qr(username)
-                            st.success(f"Teacher {name} registered successfully! You can now login.")
 
     # ---------------- DASHBOARD (ROLE BASED) ----------------
     elif menu == "Dashboard" and "logged_in" in st.session_state:
@@ -366,7 +330,6 @@ def main():
                 grid_df, date_cols = get_attendance_grid(all_usernames, days=30)
                 st.subheader("Attendance Calendar (Last 30 Days)")
                 
-                # FIX: changed .applymap to .map
                 st.dataframe(grid_df.style.map(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
 
         # --- TEACHER DASHBOARD ---
@@ -375,15 +338,14 @@ def main():
             
             # Teacher can see his OWN attendance AND students in his class
             users_df = load_users()
-            # Fetch students of this class
             class_students = users_df[(users_df["class_name"] == current_class) & (users_df["role"] == "Student")]["username"].tolist()
-            # Allow teacher to view his own data + class students
             view_usernames = [current_username] + class_students
             
             tab1, tab2, tab3 = st.tabs(["📸 Mark Attendance", "📊 Class Attendance (Grid)", "📋 Details"])
             
             with tab1:
                 st.subheader("Mark Your Attendance via QR Code")
+                st.info("💡 To mark attendance, scan your QR code. Download it from the 'My QR' tab.")
                 action = st.radio("Select Action:", ["Check In", "Check Out", "Mark Leave"], horizontal=True)
                 qr_img = st.file_uploader("Upload Your QR Code", type=['png', 'jpg', 'jpeg'])
                 if qr_img is not None and st.button("✅ Submit Attendance"):
@@ -395,7 +357,6 @@ def main():
                 st.subheader(f"Grid View: My Class ({current_class})")
                 grid_df, date_cols = get_attendance_grid(view_usernames, days=30)
                 
-                # FIX: changed .applymap to .map
                 st.dataframe(grid_df.style.map(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
             
             with tab3:
@@ -411,6 +372,7 @@ def main():
             
             with tab1:
                 st.subheader("Mark Attendance via QR Code")
+                st.info("💡 To mark attendance, scan your QR code. Download it from the 'My QR' tab.")
                 action = st.radio("Select Action:", ["Check In", "Check Out", "Mark Leave"], horizontal=True)
                 qr_img = st.file_uploader("Upload QR Code", type=['png', 'jpg', 'jpeg'])
                 if qr_img is not None and st.button("✅ Submit Attendance"):
@@ -422,7 +384,6 @@ def main():
                 st.subheader("📈 My Performance (Grid View)")
                 grid_df, date_cols = get_attendance_grid([current_username], days=30)
                 
-                # FIX: changed .applymap to .map
                 st.dataframe(grid_df.style.map(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
                 
                 st.subheader("Detailed Check-In/Out Logs")
