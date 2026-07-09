@@ -149,7 +149,7 @@ def mark_attendance_qr(qr_upload, username, action):
                                          columns=["username", "date", "checkin_time", "checkout_time", "status", "method"])
                 df = pd.concat([df, new_record], ignore_index=True)
                 save_attendance(df)
-                return True, f"Check In Successful at {time_str}!"
+                return True, f"✅ Check In Successful at {time_str}!"
 
             elif action == "Check Out":
                 if today_record.empty or today_record.iloc[0]["checkin_time"] == "":
@@ -160,7 +160,7 @@ def mark_attendance_qr(qr_upload, username, action):
                 # Update the Check-Out time
                 df.loc[(df["username"] == username) & (df["date"] == date), "checkout_time"] = time_str
                 save_attendance(df)
-                return True, f"Check Out Successful at {time_str}!"
+                return True, f"✅ Check Out Successful at {time_str}!"
 
             elif action == "Mark Leave":
                 if not today_record.empty:
@@ -169,7 +169,7 @@ def mark_attendance_qr(qr_upload, username, action):
                                          columns=["username", "date", "checkin_time", "checkout_time", "status", "method"])
                 df = pd.concat([df, new_record], ignore_index=True)
                 save_attendance(df)
-                return True, "Leave Marked Successfully!"
+                return True, "✅ Leave Marked Successfully!"
                 
         else:
             return False, "Invalid QR Code for this user!"
@@ -215,7 +215,7 @@ def main():
     st.sidebar.title("📚 AMS Portal")
     
     if "logged_in" not in st.session_state:
-        # Updated: Removed "Register Teacher" from public menu. Only Najeeb can add Teachers.
+        # Only Students can Register publicly. Teachers are added by Najeeb.
         menu = st.sidebar.selectbox("Select Option", ["Login", "Register Student"])
     else:
         menu = st.sidebar.selectbox("Select Option", ["Dashboard", "Logout"])
@@ -322,30 +322,36 @@ def main():
                             users = pd.concat([users, new_row], ignore_index=True)
                             save_users(users)
                             generate_qr(t_username)
+                            
                             st.success(f"Teacher {t_name} added successfully!")
+                            
+                            # NEW: Immediately show QR Code to Head Teacher
+                            qr_path = f"qr_codes/{t_username}.png"
+                            st.image(qr_path, caption=f"{t_name}'s QR Code", width=200)
+                            with open(qr_path, "rb") as f:
+                                st.download_button("⬇️ Download Teacher QR", f, file_name=f"{t_username}_qr.png")
             
             with tab2:
                 all_users = load_users()
                 all_usernames = all_users["username"].tolist()
                 grid_df, date_cols = get_attendance_grid(all_usernames, days=30)
                 st.subheader("Attendance Calendar (Last 30 Days)")
-                
                 st.dataframe(grid_df.style.map(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
 
         # --- TEACHER DASHBOARD ---
         elif role == "Teacher":
             st.markdown(f'<div class="main-header"><h1>🧑‍🏫 Teacher Dashboard</h1><p>Welcome, {st.session_state["user_name"]}</p></div>', unsafe_allow_html=True)
             
-            # Teacher can see his OWN attendance AND students in his class
             users_df = load_users()
             class_students = users_df[(users_df["class_name"] == current_class) & (users_df["role"] == "Student")]["username"].tolist()
             view_usernames = [current_username] + class_students
             
-            tab1, tab2, tab3 = st.tabs(["📸 Mark Attendance", "📊 Class Attendance (Grid)", "📋 Details"])
+            # NEW: Added the 4th tab for "My QR"
+            tab1, tab2, tab3, tab4 = st.tabs(["📸 Mark Attendance", "📊 Class Attendance (Grid)", "📋 Details", "🆔 My QR"])
             
             with tab1:
                 st.subheader("Mark Your Attendance via QR Code")
-                st.info("💡 To mark attendance, scan your QR code. Download it from the 'My QR' tab.")
+                st.info("💡 Download your QR from the 'My QR' tab, then upload it here to mark attendance.")
                 action = st.radio("Select Action:", ["Check In", "Check Out", "Mark Leave"], horizontal=True)
                 qr_img = st.file_uploader("Upload Your QR Code", type=['png', 'jpg', 'jpeg'])
                 if qr_img is not None and st.button("✅ Submit Attendance"):
@@ -356,13 +362,23 @@ def main():
             with tab2:
                 st.subheader(f"Grid View: My Class ({current_class})")
                 grid_df, date_cols = get_attendance_grid(view_usernames, days=30)
-                
                 st.dataframe(grid_df.style.map(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
             
             with tab3:
                 st.subheader("Detailed Attendance Records")
                 df_att = load_attendance()
                 st.dataframe(df_att[df_att["username"].isin(view_usernames)], use_container_width=True)
+
+            # NEW: My QR Tab for Teachers
+            with tab4:
+                st.subheader("🆔 My ID QR Code")
+                qr_path = f"qr_codes/{current_username}.png"
+                if os.path.exists(qr_path):
+                    st.image(qr_path, caption="Scan to Mark Attendance", width=200)
+                    with open(qr_path, "rb") as f:
+                        st.download_button("⬇️ Download My QR", f, file_name=f"{current_username}_qr.png")
+                else:
+                    st.warning("QR Code not found. Please contact Head Teacher.")
 
         # --- STUDENT DASHBOARD ---
         elif role == "Student":
@@ -372,7 +388,7 @@ def main():
             
             with tab1:
                 st.subheader("Mark Attendance via QR Code")
-                st.info("💡 To mark attendance, scan your QR code. Download it from the 'My QR' tab.")
+                st.info("💡 Download your QR from the 'My QR' tab, then upload it here to mark attendance.")
                 action = st.radio("Select Action:", ["Check In", "Check Out", "Mark Leave"], horizontal=True)
                 qr_img = st.file_uploader("Upload QR Code", type=['png', 'jpg', 'jpeg'])
                 if qr_img is not None and st.button("✅ Submit Attendance"):
@@ -383,7 +399,6 @@ def main():
             with tab2:
                 st.subheader("📈 My Performance (Grid View)")
                 grid_df, date_cols = get_attendance_grid([current_username], days=30)
-                
                 st.dataframe(grid_df.style.map(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
                 
                 st.subheader("Detailed Check-In/Out Logs")
@@ -399,7 +414,7 @@ def main():
                     with open(qr_path, "rb") as f:
                         st.download_button("⬇️ Download QR", f, file_name=f"{current_username}_qr.png")
                 else:
-                    st.warning("QR Code not found.")
+                    st.warning("QR Code not found. Contact your teacher.")
 
     # ---------------- LOGOUT ----------------
     elif menu == "Logout":
