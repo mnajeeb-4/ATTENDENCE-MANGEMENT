@@ -8,8 +8,6 @@ import cv2
 import numpy as np
 from PIL import Image
 import plotly.express as px
-import smtplib
-import random
 
 # --- ULTRA MODERN CSS & HTML INTERFACE ---
 def load_css():
@@ -63,15 +61,6 @@ def load_css():
         border: 1px solid rgba(255, 255, 255, 0.5);
         margin-bottom: 20px;
     }
-    .otp-box {
-        background: #fef08a;
-        padding: 15px;
-        border-radius: 10px;
-        border-left: 5px solid #ca8a04;
-        color: #854d0e;
-        font-weight: 600;
-        text-align: center;
-    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -83,14 +72,24 @@ def init_data():
     os.makedirs("data", exist_ok=True)
     os.makedirs("qr_codes", exist_ok=True)
     
-    # Creating Empty files if not exist (NO HARDCODED USERS created automatically now)
+    # Creating Empty files if not exist
     if not os.path.exists("data/users.csv"):
-        df = pd.DataFrame(columns=["username", "password_hash", "role", "name", "email", "phone"])
+        df = pd.DataFrame(columns=["username", "password_hash", "role", "name", "email", "phone", "created_by"])
         df.to_csv("data/users.csv", index=False)
         
     if not os.path.exists("data/attendance.csv"):
         df = pd.DataFrame(columns=["username", "date", "time", "method", "status"])
         df.to_csv("data/attendance.csv", index=False)
+    
+    # Auto-create Head Teacher (Najeeb) on first run
+    users = load_users()
+    if "najeeb" not in users["username"].values:
+        new_row = pd.DataFrame([[
+            "najeeb", hash_password("inajeeb123"), "HeadTeacher", 
+            "Mr. Najeeb", "najeeb@university.edu", "+92 300 0000000", "system"
+        ]], columns=["username", "password_hash", "role", "name", "email", "phone", "created_by"])
+        users = pd.concat([users, new_row], ignore_index=True)
+        save_users(users)
 
 def load_users():
     return pd.read_csv("data/users.csv")
@@ -110,32 +109,6 @@ def generate_qr(username):
     path = f"qr_codes/{username}.png"
     img.save(path)
     return path
-
-# --- REAL OTP EMAIL SERVICE ---
-def generate_otp():
-    return random.randint(100000, 999999)
-
-def send_otp_email(receiver_email, otp):
-    try:
-        # Accessing secrets safely
-        sender_email = st.secrets["email"]["sender"]
-        password = st.secrets["email"]["password"]
-        
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(sender_email, password)
-        
-        subject = "Attendance System: Teacher Registration OTP"
-        body = f"Dear Teacher,\n\nYour OTP for registration is: {otp}\n\nDo not share this OTP with anyone.\n\nRegards,\nAMS Team"
-        message = f"Subject: {subject}\n\n{body}"
-        
-        server.sendmail(sender_email, receiver_email, message)
-        server.quit()
-        return True
-    except Exception as e:
-        # Fallback: Log error but don't crash
-        print(f"Email Error: {e}")
-        return False
 
 # --- CLOUD VERSION: QR CODE ATTENDANCE ---
 def mark_attendance_qr(qr_upload, username):
@@ -168,12 +141,15 @@ def main():
     
     # Sidebar Menu
     st.sidebar.title("📚 AMS Portal")
-    menu = st.sidebar.selectbox("Select Option", ["Teacher Login", "Register Teacher", "Student Dashboard"])
     
-    # ---------------- TEACHER LOGIN ----------------
-    if menu == "Teacher Login":
-        st.markdown('<div class="main-header"><h1>🎓 Teacher Login</h1><p>Secure Cloud Authentication</p></div>', unsafe_allow_html=True)
-        
+    if "logged_in" not in st.session_state:
+        menu = st.sidebar.selectbox("Select Option", ["Login", "Register Student"])
+    else:
+        menu = st.sidebar.selectbox("Select Option", ["Dashboard", "Logout"])
+    
+    # ---------------- LOGIN ----------------
+    if menu == "Login":
+        st.markdown('<div class="main-header"><h1>🎓 Secure Login</h1></div>', unsafe_allow_html=True)
         with st.container():
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
@@ -187,178 +163,133 @@ def main():
                     if login_btn:
                         users = load_users()
                         hashed_input = hash_password(password)
-                        user = users[(users["username"] == username) & (users["password_hash"] == hashed_input) & (users["role"] == "Teacher")]
+                        user = users[(users["username"] == username) & (users["password_hash"] == hashed_input)]
                         
                         if not user.empty:
                             st.session_state["logged_in"] = True
                             st.session_state["username"] = username
-                            st.session_state["role"] = "Teacher"
+                            st.session_state["role"] = user.iloc[0]['role']
                             st.session_state["user_name"] = user.iloc[0]['name']
                             st.success(f"Welcome back, {user.iloc[0]['name']}!")
                             st.rerun()
                         else:
-                            st.error("Invalid Credentials or Account not registered!")
+                            st.error("Invalid Username or Password!")
 
-    # ---------------- TEACHER SELF-REGISTRATION WITH OTP ----------------
-    elif menu == "Register Teacher":
-        st.markdown('<div class="main-header"><h1>📝 Teacher Registration</h1><p>Verify via Email OTP</p></div>', unsafe_allow_html=True)
-        
-        # Step 1: Collect Data
+    # ---------------- STUDENT SELF REGISTRATION ----------------
+    elif menu == "Register Student":
+        st.markdown('<div class="main-header"><h1>📝 Student Registration</h1></div>', unsafe_allow_html=True)
         with st.container():
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
-                with st.form("reg_form"):
+                with st.form("student_reg"):
                     st.markdown('<div class="card">', unsafe_allow_html=True)
-                    st.subheader("Register as Teacher")
-                    name = st.text_input("Full Name", value="Mr. Najeeb")
-                    username = st.text_input("Desired Username", value="najeeb")
-                    phone = st.text_input("Phone Number", placeholder="+92 300 1234567")
-                    email = st.text_input("Email (For OTP)", placeholder="teacher@gmail.com")
-                    password = st.text_input("Password", type="password", value="inajeeb123")
-                    
-                    submit_reg = st.form_submit_button("Proceed to OTP Verification")
+                    st.subheader("Register Yourself")
+                    name = st.text_input("Full Name")
+                    username = st.text_input("Desired Username")
+                    phone = st.text_input("Phone Number")
+                    email = st.text_input("Email")
+                    password = st.text_input("Create Password", type="password")
+                    submit_reg = st.form_submit_button("Register as Student")
                     st.markdown('</div>', unsafe_allow_html=True)
                     
                     if submit_reg:
                         users = load_users()
                         if username in users["username"].values:
                             st.error("Username already taken! Please choose another.")
-                        elif not email:
-                            st.error("Email is required to receive OTP.")
+                        elif not username or not password:
+                            st.error("Username and Password are required.")
                         else:
-                            # Generate OTP and store in session
-                            otp_code = generate_otp()
-                            st.session_state["pending_otp"] = otp_code
-                            st.session_state["pending_user"] = {
-                                "name": name, "username": username, "email": email, 
-                                "phone": phone, "password": hash_password(password)
-                            }
+                            new_row = pd.DataFrame([[
+                                username, hash_password(password), "Student", 
+                                name, email, phone, "self"
+                            ]], columns=["username", "password_hash", "role", "name", "email", "phone", "created_by"])
                             
-                            # Try sending real email
-                            email_sent = send_otp_email(email, otp_code)
-                            
-                            if email_sent:
-                                st.success(f"OTP sent successfully to {email}! Check your inbox.")
-                            else:
-                                st.warning("⚠️ Email service is currently offline. For demo purpose, OTP is shown below:")
-                                st.markdown(f'<div class="otp-box">🔑 Your One-Time Password (OTP) is: {otp_code}</div>', unsafe_allow_html=True)
-                            
-                            st.session_state["step"] = "verify_otp"
-                            st.rerun()
+                            users = pd.concat([users, new_row], ignore_index=True)
+                            save_users(users)
+                            generate_qr(username)
+                            st.success(f"Registration Successful for {name}! You can now login.")
 
-        # Step 2: Verify OTP
-        if "step" in st.session_state and st.session_state["step"] == "verify_otp":
-            st.markdown("### ✅ Verify OTP")
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                otp_input = st.text_input("Enter the 6-digit OTP sent to your email", max_chars=6)
-                if st.button("Verify OTP & Create Account"):
-                    if otp_input and int(otp_input) == st.session_state["pending_otp"]:
-                        # Save the user to CSV
-                        users = load_users()
-                        new_user = st.session_state["pending_user"]
-                        new_row = pd.DataFrame([[
-                            new_user["username"], new_user["password"], "Teacher", 
-                            new_user["name"], new_user["email"], new_user["phone"]
-                        ]], columns=["username", "password_hash", "role", "name", "email", "phone"])
-                        
-                        users = pd.concat([users, new_row], ignore_index=True)
-                        save_users(users)
-                        generate_qr(new_user["username"])
-                        
-                        st.success(f"Account created successfully for {new_user['name']}! You can now login.")
-                        # Cleanup session
-                        del st.session_state["step"]
-                        del st.session_state["pending_otp"]
-                        del st.session_state["pending_user"]
-                        st.rerun()
-                    else:
-                        st.error("Incorrect OTP. Please try again.")
-
-    # ---------------- TEACHER DASHBOARD (After Login) ----------------
-    if "logged_in" in st.session_state and st.session_state["role"] == "Teacher":
-        st.markdown(f'<div class="main-header"><h1>👨‍🏫 Teacher Dashboard</h1><p>Welcome, {st.session_state["user_name"]}</p></div>', unsafe_allow_html=True)
+    # ---------------- DASHBOARD (ROLE BASED) ----------------
+    elif menu == "Dashboard" and "logged_in" in st.session_state:
+        role = st.session_state["role"]
         
-        # Custom Sidebar for Logout
-        if st.sidebar.button("🚪 Logout"):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.rerun()
+        # --- HEAD TEACHER DASHBOARD (NAJEEB) ---
+        if role == "HeadTeacher":
+            st.markdown(f'<div class="main-header"><h1>👑 Head Teacher Dashboard</h1><p>Welcome, {st.session_state["user_name"]}</p></div>', unsafe_allow_html=True)
             
-        tab1, tab2, tab3 = st.tabs(["➕ Add Student", "📊 Analytics", "📋 Records"])
-        
-        with tab1:
-            with st.form("add_student"):
-                st.subheader("Register a New Student")
-                new_name = st.text_input("Full Name")
-                new_username = st.text_input("Username (Unique ID)")
-                new_pass = st.text_input("Create a Password for Student", type="password")
-                if st.form_submit_button("Add Student"):
-                    users = load_users()
-                    if new_username in users["username"].values:
-                        st.error("Username already exists!")
-                    else:
-                        new_row = pd.DataFrame([[
-                            new_username, hash_password(new_pass), "Student", 
-                            new_name, "N/A", "N/A"
-                        ]], columns=["username", "password_hash", "role", "name", "email", "phone"])
-                        users = pd.concat([users, new_row], ignore_index=True)
-                        save_users(users)
-                        generate_qr(new_username)
-                        st.success(f"Student {new_name} added successfully! ID Card QR generated.")
-        
-        with tab2:
-            st.subheader("📊 Class Attendance Analytics")
-            df = load_attendance()
-            if df.empty:
-                st.info("No attendance records found yet.")
-            else:
-                col1, col2 = st.columns(2)
-                with col1:
-                    fig = px.pie(df, names='username', title='Attendance Distribution', hole=0.4, color_discrete_sequence=px.colors.sequential.Bluyl)
-                    st.plotly_chart(fig, use_container_width=True)
-                with col2:
-                    fig_bar = px.bar(df.groupby('username').count().reset_index(), x='username', y='date', title='Total Count', color='username', text_auto=True)
-                    st.plotly_chart(fig_bar, use_container_width=True)
-        
-        with tab3:
-            st.subheader("📋 All Students Attendance Records")
-            st.dataframe(load_attendance(), use_container_width=True)
-
-    # ---------------- STUDENT DASHBOARD ----------------
-    elif menu == "Student Dashboard":
-        with st.container():
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                with st.form("student_login_form"):
-                    st.markdown('<div class="card"><h3 style="color:#1f2937;">🧑‍🎓 Student Login</h3>', unsafe_allow_html=True)
-                    username = st.text_input("Username")
-                    password = st.text_input("Password", type="password")
-                    login_btn = st.form_submit_button("Login")
-                    st.markdown('</div>', unsafe_allow_html=True)
+            if st.sidebar.button("🚪 Logout"):
+                for key in list(st.session_state.keys()): del st.session_state[key]
+                st.rerun()
+            
+            tab1, tab2 = st.tabs(["➕ Add New Teacher", "📋 All Users Data"])
+            
+            with tab1:
+                with st.form("add_teacher"):
+                    st.subheader("Register a New Teacher")
+                    t_name = st.text_input("Teacher Full Name")
+                    t_username = st.text_input("Teacher Username")
+                    t_pass = st.text_input("Teacher Password", type="password")
+                    t_email = st.text_input("Teacher Email")
+                    t_phone = st.text_input("Teacher Phone")
                     
-                    if login_btn:
+                    if st.form_submit_button("Add Teacher"):
                         users = load_users()
-                        hashed_input = hash_password(password)
-                        user = users[(users["username"] == username) & (users["password_hash"] == hashed_input) & (users["role"] == "Student")]
-                        
-                        if not user.empty:
-                            st.session_state["logged_in"] = True
-                            st.session_state["username"] = username
-                            st.session_state["role"] = "Student"
-                            st.rerun()
+                        if t_username in users["username"].values:
+                            st.error("Username already exists!")
                         else:
-                            st.error("Invalid Student Credentials!")
-
-        if "logged_in" in st.session_state and st.session_state["role"] == "Student":
-            username = st.session_state["username"]
-            st.markdown(f'<div class="main-header"><h1>🧑‍🎓 Student Dashboard</h1><p>Welcome, {username}</p></div>', unsafe_allow_html=True)
+                            new_row = pd.DataFrame([[
+                                t_username, hash_password(t_pass), "Teacher", 
+                                t_name, t_email, t_phone, "najeeb"
+                            ]], columns=["username", "password_hash", "role", "name", "email", "phone", "created_by"])
+                            users = pd.concat([users, new_row], ignore_index=True)
+                            save_users(users)
+                            generate_qr(t_username)
+                            st.success(f"Teacher {t_name} added successfully!")
             
+            with tab2:
+                st.dataframe(load_users(), use_container_width=True)
+
+        # --- TEACHER DASHBOARD ---
+        elif role == "Teacher":
+            st.markdown(f'<div class="main-header"><h1>🧑‍🏫 Teacher Dashboard</h1><p>Welcome, {st.session_state["user_name"]}</p></div>', unsafe_allow_html=True)
+            
+            if st.sidebar.button("🚪 Logout"):
+                for key in list(st.session_state.keys()): del st.session_state[key]
+                st.rerun()
+                
+            tab1, tab2 = st.tabs(["📊 Analytics", "📋 Attendance Records"])
+            
+            with tab1:
+                st.subheader("Class Attendance Analytics")
+                df = load_attendance()
+                if df.empty:
+                    st.info("No attendance records found yet.")
+                else:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        fig = px.pie(df, names='username', title='Attendance Distribution', hole=0.4, color_discrete_sequence=px.colors.sequential.Bluyl)
+                        st.plotly_chart(fig, use_container_width=True)
+                    with col2:
+                        fig_bar = px.bar(df.groupby('username').count().reset_index(), x='username', y='date', title='Total Count', color='username', text_auto=True)
+                        st.plotly_chart(fig_bar, use_container_width=True)
+            
+            with tab2:
+                st.subheader("All Students Attendance Records")
+                st.dataframe(load_attendance(), use_container_width=True)
+
+        # --- STUDENT DASHBOARD ---
+        elif role == "Student":
+            username = st.session_state["username"]
+            st.markdown(f'<div class="main-header"><h1>🧑‍🎓 Student Dashboard</h1><p>Welcome, {st.session_state["user_name"]}</p></div>', unsafe_allow_html=True)
+            
+            if st.sidebar.button("🚪 Logout"):
+                for key in list(st.session_state.keys()): del st.session_state[key]
+                st.rerun()
+                
             tab1, tab2, tab3 = st.tabs(["Mark Attendance", "My Stats", "My QR"])
             
             with tab1:
                 st.subheader("📸 Mark Attendance via QR Code")
-                st.info("Upload the QR code image generated by your Teacher.")
                 qr_img = st.file_uploader("Upload QR Code", type=['png', 'jpg', 'jpeg'])
                 if qr_img is not None and st.button("✅ Mark Attendance"):
                     status, msg = mark_attendance_qr(qr_img, username)
@@ -377,14 +308,20 @@ def main():
                     st.metric(label="Total Present Days", value=len(my_data))
             
             with tab3:
-                st.subheader("🆔 My QR Code")
+                st.subheader("🆔 My ID QR Code")
                 qr_path = f"qr_codes/{username}.png"
                 if os.path.exists(qr_path):
                     st.image(qr_path, caption="Scan to Mark Attendance", width=200)
                     with open(qr_path, "rb") as f:
                         st.download_button("⬇️ Download QR", f, file_name=f"{username}_qr.png")
                 else:
-                    st.warning("QR not generated yet. Contact your teacher.")
+                    st.warning("QR Code not found.")
+
+    # ---------------- LOGOUT ----------------
+    elif menu == "Logout":
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
 
 if __name__ == "__main__":
     main()
