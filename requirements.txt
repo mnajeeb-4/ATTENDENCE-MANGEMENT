@@ -1,2 +1,7 @@
 streamlit
 pandas
+plotly
+opencv-python
+numpy
+qrcode
+pillow
