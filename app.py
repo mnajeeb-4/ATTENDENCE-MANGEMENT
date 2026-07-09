@@ -365,8 +365,9 @@ def main():
                 all_usernames = all_users["username"].tolist()
                 grid_df, date_cols = get_attendance_grid(all_usernames, days=30)
                 st.subheader("Attendance Calendar (Last 30 Days)")
-                # Color formatting
-                st.dataframe(grid_df.style.applymap(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
+                
+                # FIX: changed .applymap to .map
+                st.dataframe(grid_df.style.map(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
 
         # --- TEACHER DASHBOARD ---
         elif role == "Teacher":
@@ -393,8 +394,9 @@ def main():
             with tab2:
                 st.subheader(f"Grid View: My Class ({current_class})")
                 grid_df, date_cols = get_attendance_grid(view_usernames, days=30)
-                # Apply color formatting similar to screenshot
-                st.dataframe(grid_df.style.applymap(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
+                
+                # FIX: changed .applymap to .map
+                st.dataframe(grid_df.style.map(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
             
             with tab3:
                 st.subheader("Detailed Attendance Records")
@@ -419,7 +421,9 @@ def main():
             with tab2:
                 st.subheader("📈 My Performance (Grid View)")
                 grid_df, date_cols = get_attendance_grid([current_username], days=30)
-                st.dataframe(grid_df.style.applymap(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
+                
+                # FIX: changed .applymap to .map
+                st.dataframe(grid_df.style.map(lambda x: 'background-color: #d4edda' if 'P' in str(x) else ('background-color: #f8d7da' if 'A' == str(x) else ('background-color: #fff3cd' if 'L' == str(x) else '')), subset=date_cols), use_container_width=True)
                 
                 st.subheader("Detailed Check-In/Out Logs")
                 df = load_attendance()
