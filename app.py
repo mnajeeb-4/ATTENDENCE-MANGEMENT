@@ -1,157 +1,144 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
-import hashlib
 from datetime import datetime
+import os
 
 # --- PAGE CONFIG & CSS ---
-st.set_page_config(page_title="AMS Cloud", layout="centered", page_icon="🎓")
+st.set_page_config(page_title="AMS Cloud CSV", layout="centered", page_icon="🎓")
 
-def inject_css():
-    st.markdown("""
-        <style>
-        .stApp { background-color: #f4f6f9; }
-        h1, h2, h3 { color: #2c3e50; font-family: 'Arial', sans-serif; }
-        .stButton>button {
-            background-color: #2980b9; color: white; border-radius: 8px; width: 100%;
-            font-weight: bold; padding: 10px; border: none; transition: 0.3s;
-        }
-        .stButton>button:hover { background-color: #3498db; }
-        .stTextInput>div>div>input { border-radius: 5px; border: 1px solid #bdc3c7; }
-        div[data-testid="stSidebar"] { background-color: #2c3e50; }
-        div[data-testid="stSidebar"] * { color: white !important; }
-        </style>
-    """, unsafe_allow_html=True)
+st.markdown("""
+    <style>
+    .stApp { background-color: #f8f9fa; }
+    h1, h2, h3 { color: #1e3799; font-family: 'Segoe UI', sans-serif; }
+    .stButton>button {
+        background-color: #1e3799; color: white; border-radius: 6px; width: 100%;
+        font-weight: bold; padding: 10px; border: none;
+    }
+    .stButton>button:hover { background-color: #4a69bd; }
+    </style>
+""", unsafe_allow_html=True)
 
-# --- DATABASE SETUP ---
-def init_db():
-    conn = sqlite3.connect('ams_database.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, role TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS attendance (username TEXT, date TEXT, status TEXT, method TEXT)''')
-    conn.commit()
-    conn.close()
+# --- CSV DATA CORE LOGIC ---
+USERS_FILE = "users.csv"
+ATTENDANCE_FILE = "attendance_cloud.csv"
 
-# --- SECURITY ---
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+def load_data(file_path, columns):
+    if os.path.exists(file_path):
+        return pd.read_csv(file_path)
+    return pd.DataFrame(columns=columns)
 
-def add_user(username, password, role):
-    conn = sqlite3.connect('ams_database.db')
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO users VALUES (?, ?, ?)", (username, hash_password(password), role))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
+def save_data(df, file_path):
+    df.to_csv(file_path, index=False)
 
-def authenticate(username, password):
-    conn = sqlite3.connect('ams_database.db')
-    c = conn.cursor()
-    c.execute("SELECT role FROM users WHERE username = ? AND password = ?", (username, hash_password(password)))
-    result = c.fetchone()
-    conn.close()
-    return result[0] if result else None
-
-# --- CORE LOGIC ---
-def mark_attendance(username, method):
-    conn = sqlite3.connect('ams_database.db')
-    c = conn.cursor()
-    date_today = datetime.now().strftime("%Y-%m-%d")
-    c.execute("SELECT * FROM attendance WHERE username = ? AND date = ?", (username, date_today))
-    if c.fetchone():
-        conn.close()
-        return False
-    c.execute("INSERT INTO attendance VALUES (?, ?, ?, ?)", (username, date_today, "Present", method))
-    conn.commit()
-    conn.close()
-    return True
+# Load current data into session state
+if 'users_df' not in st.session_state:
+    st.session_state.users_df = load_data(USERS_FILE, ["username", "password", "role"])
+if 'attendance_df' not in st.session_state:
+    st.session_state.attendance_df = load_data(ATTENDANCE_FILE, ["username", "date", "status", "method"])
 
 # --- DASHBOARDS ---
 def student_dashboard(username):
-    st.title(f"🎓 Welcome, {username}")
-    st.write("Mark your daily attendance below.")
+    st.title(f"🎓 Student Portal: {username}")
     
     method = st.selectbox("Select Attendance Method:", ["Face Recognition (Camera)", "QR Code Simulation"])
+    date_today = datetime.now().strftime("%Y-%m-%d")
     
     if method == "Face Recognition (Camera)":
-        img = st.camera_input("Take a picture to verify face")
+        img = st.camera_input("Verify your face")
         if img and st.button("Mark Attendance"):
-            if mark_attendance(username, "Face"):
-                st.success("✅ Attendance Marked Successfully via Face Recognition!")
+            df = st.session_state.attendance_df
+            # Check duplicate
+            if not ((df['username'] == username) & (df['date'] == date_today)).any():
+                new_row = pd.DataFrame([[username, date_today, "Present", "Face"]], columns=df.columns)
+                st.session_state.attendance_df = pd.concat([df, new_row], ignore_index=True)
+                save_data(st.session_state.attendance_df, ATTENDANCE_FILE)
+                st.success("✅ Attendance Marked via Face Recognition!")
             else:
-                st.warning("⚠️ Attendance already marked for today.")
+                st.warning("⚠️ Already marked for today.")
     else:
-        if st.button("Simulate QR Scan & Mark Attendance"):
-            if mark_attendance(username, "QR"):
-                st.success("✅ Attendance Marked Successfully via QR Code!")
+        if st.button("Scan QR & Mark Attendance"):
+            df = st.session_state.attendance_df
+            if not ((df['username'] == username) & (df['date'] == date_today)).any():
+                new_row = pd.DataFrame([[username, date_today, "Present", "QR"]], columns=df.columns)
+                st.session_state.attendance_df = pd.concat([df, new_row], ignore_index=True)
+                save_data(st.session_state.attendance_df, ATTENDANCE_FILE)
+                st.success("✅ Attendance Marked via QR Code!")
             else:
-                st.warning("⚠️ Attendance already marked for today.")
-                
+                st.warning("⚠️ Already marked for today.")
+
     st.divider()
-    st.subheader("📊 Your Attendance Statistics")
-    conn = sqlite3.connect('ams_database.db')
-    df = pd.read_sql_query("SELECT date, status, method FROM attendance WHERE username = ?", conn, params=(username,))
-    conn.close()
-    if not df.empty:
-        st.dataframe(df, use_container_width=True)
-        st.bar_chart(df['date'].value_counts())
+    st.subheader("📊 Your Attendance Records")
+    df = st.session_state.attendance_df
+    student_df = df[df['username'] == username]
+    if not student_df.empty:
+        st.dataframe(student_df, use_container_width=True)
+        st.bar_chart(student_df['date'].value_counts())
     else:
-        st.info("No records found.")
+        st.info("No history found.")
 
 def teacher_dashboard():
-    st.title("👨‍🏫 Teacher Dashboard")
-    menu = st.sidebar.radio("Navigation", ["View Class Attendance", "Manage Students"])
+    st.title("👨‍🏫 Teacher Cloud Dashboard")
     
-    if menu == "Manage Students":
-        st.subheader("➕ Register New Student")
-        new_user = st.text_input("Student Username")
-        new_pass = st.text_input("Student Password", type="password")
-        if st.button("Register Student"):
-            if add_user(new_user, new_pass, "Student"):
-                st.success("✅ Student Registered Successfully!")
+    menu = st.sidebar.radio("Menu", ["View Attendance", "Register Student", "Cloud Backup & Sync"])
+    
+    if menu == "Register Student":
+        st.subheader("➕ Add New Student")
+        new_user = st.text_input("Username")
+        new_pass = st.text_input("Password", type="password")
+        if st.button("Register"):
+            df = st.session_state.users_df
+            if new_user not in df['username'].values:
+                new_row = pd.DataFrame([[new_user, new_pass, "Student"]], columns=df.columns)
+                st.session_state.users_df = pd.concat([df, new_row], ignore_index=True)
+                save_data(st.session_state.users_df, USERS_FILE)
+                st.success("✅ Student Registered!")
             else:
                 st.error("❌ Username already exists.")
                 
-    elif menu == "View Class Attendance":
-        st.subheader("📈 Class Attendance Insights")
-        conn = sqlite3.connect('ams_database.db')
-        df = pd.read_sql_query("SELECT * FROM attendance", conn)
-        conn.close()
+    elif menu == "View Attendance":
+        st.subheader("📊 Complete Class Attendance")
+        df = st.session_state.attendance_df
         if not df.empty:
             st.dataframe(df, use_container_width=True)
-            st.write("Attendance Trend:")
             st.line_chart(df.groupby('date').size())
         else:
-            st.info("No attendance records to display.")
+            st.info("No records yet.")
+            
+    elif menu == "Cloud Backup & Sync":
+        st.subheader("💾 Backup Your CSV Data")
+        st.write("Streamlit Cloud resets files periodically. Download or upload your data to keep it safe.")
+        
+        # Download buttons
+        att_csv = st.session_state.attendance_df.to_csv(index=False)
+        st.download_button("📥 Download Attendance CSV", data=att_csv, file_name="attendance_cloud.csv", mime="text/csv")
+        
+        # Upload tool
+        uploaded_file = st.file_uploader("📤 Upload Existing Attendance CSV to Sync", type="csv")
+        if uploaded_file is not None:
+            st.session_state.attendance_df = pd.read_csv(uploaded_file)
+            save_data(st.session_state.attendance_df, ATTENDANCE_FILE)
+            st.success("✅ Attendance synced successfully!")
 
 # --- MAIN APP ---
 def main():
-    inject_css()
-    init_db()
-    
     if 'logged_in' not in st.session_state:
         st.session_state.update({'logged_in': False, 'username': "", 'role': ""})
-        add_user("admin", "admin123", "Teacher") # Default Teacher Account
 
     if not st.session_state['logged_in']:
-        st.markdown("<h2 style='text-align: center;'>University AMS Login</h2>", unsafe_allow_html=True)
-        with st.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Login")
-            if submitted:
-                role = authenticate(username, password)
-                if role:
-                    st.session_state.update({'logged_in': True, 'username': username, 'role': role})
-                    st.rerun()
-                else:
-                    st.error("Invalid Credentials!")
+        st.markdown("<h2 style='text-align: center;'>AMS Cloud Login</h2>", unsafe_allow_html=True)
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        
+        if st.button("Login"):
+            df = st.session_state.users_df
+            user_match = df[(df['username'] == username) & (df['password'].astype(str) == password)]
+            if not user_match.empty:
+                st.session_state.update({'logged_in': True, 'username': username, 'role': user_match.iloc[0]['role']})
+                st.rerun()
+            else:
+                st.error("Invalid Credentials!")
     else:
-        st.sidebar.button("🚪 Logout", on_click=lambda: st.session_state.clear())
+        st.sidebar.button("Logout", on_click=lambda: st.session_state.clear())
         if st.session_state['role'] == "Student":
             student_dashboard(st.session_state['username'])
         else:
