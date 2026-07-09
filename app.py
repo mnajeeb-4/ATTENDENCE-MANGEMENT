@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import os
-import time
 import hashlib
 import qrcode
 import cv2
@@ -71,6 +70,13 @@ def load_css():
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
+def verify_user_password(username, password):
+    users = load_users()
+    user = users[users["username"] == username]
+    if user.empty:
+        return False
+    return user.iloc[0]["password_hash"] == hash_password(password)
+
 def ensure_csv_structure():
     os.makedirs("data", exist_ok=True)
     os.makedirs("qr_codes", exist_ok=True)
@@ -124,9 +130,14 @@ def generate_qr(username):
     img.save(path)
     return path
 
-# --- CLOUD VERSION: QR CODE ATTENDANCE ---
-def mark_attendance_qr(qr_upload, username, action):
+# --- CLOUD VERSION: QR CODE ATTENDANCE (WITH PASSWORD VERIFICATION) ---
+def mark_attendance_qr(qr_upload, username, password, action):
     try:
+        # 1. Verify Password First
+        if not verify_user_password(username, password):
+            return False, "Incorrect Password! Please enter your correct login password."
+        
+        # 2. Process QR Code
         img = Image.open(qr_upload)
         img_np = np.array(img)
         detector = cv2.QRCodeDetector()
@@ -312,11 +323,7 @@ def main():
                             users = pd.concat([users, new_row], ignore_index=True)
                             save_users(users)
                             generate_qr(t_username)
-                            st.success(f"Teacher {t_name} added successfully!")
-                            qr_path = f"qr_codes/{t_username}.png"
-                            st.image(qr_path, caption=f"{t_name}'s QR Code", width=200)
-                            with open(qr_path, "rb") as f:
-                                st.download_button("⬇️ Download Teacher QR", f, file_name=f"{t_username}_qr.png")
+                            st.success(f"Teacher {t_name} added successfully! QR code is available in Teacher's Dashboard.")
             
             with tab2:
                 all_users = load_users()
@@ -335,13 +342,19 @@ def main():
             
             with tab1:
                 st.subheader("Mark Your Attendance via QR Code")
-                st.info("💡 Download your QR from the 'My QR' tab, then upload it here.")
+                st.info("🔒 Enter your password first, then upload your QR Code.")
+                
                 action = st.radio("Select Action:", ["Check In", "Check Out", "Mark Leave"], horizontal=True)
+                password = st.text_input("Enter Your Login Password", type="password")
                 qr_img = st.file_uploader("Upload Your QR Code", type=['png', 'jpg', 'jpeg'])
+                
                 if qr_img is not None and st.button("✅ Submit Attendance"):
-                    status, msg = mark_attendance_qr(qr_img, current_username, action)
-                    if status: st.success(msg) 
-                    else: st.error(msg)
+                    if not password:
+                        st.error("Please enter your password!")
+                    else:
+                        status, msg = mark_attendance_qr(qr_img, current_username, password, action)
+                        if status: st.success(msg) 
+                        else: st.error(msg)
             
             with tab2:
                 st.subheader(f"Grid View: My Class ({current_class})")
@@ -355,32 +368,37 @@ def main():
                 qr_path = f"qr_codes/{current_username}.png"
                 if os.path.exists(qr_path):
                     st.image(qr_path, caption="Scan to Mark Attendance", width=200)
+                    # Fixed Download Button Error
                     with open(qr_path, "rb") as f:
-                        st.download_button("⬇️ Download My QR", f, file_name=f"{current_username}_qr.png")
+                        file_data = f.read()
+                    st.download_button("⬇️ Download My QR", file_data, file_name=f"{current_username}_qr.png")
                 else:
                     st.warning("QR Code not found. Please contact Head Teacher.")
 
-        # ========================= STUDENT DASHBOARD =========================
+        # --- STUDENT DASHBOARD ---
         elif role == "Student":
             st.markdown(f'<div class="main-header"><h1>🧑‍🎓 Student Dashboard</h1><p>Welcome, {st.session_state["user_name"]}</p></div>', unsafe_allow_html=True)
             
-            # 👇 Isme Students ki Attendance ka pura system hai
             tab1, tab2, tab3 = st.tabs(["📸 Mark Attendance", "📈 My Statistics", "🆔 My QR"])
             
             with tab1:
                 st.subheader("Mark Attendance via QR Code")
-                st.info("💡 Pehle 'My QR' tab se apna QR Code download karein, phir yahan upload karke attendance mark karein.")
+                st.info("🔒 Apna Password enter karein, phir QR Code upload karein.")
                 
                 action = st.radio("Select Action:", ["Check In", "Check Out", "Mark Leave"], horizontal=True)
+                password = st.text_input("Apna Password Enter Karein", type="password")
                 qr_img = st.file_uploader("Upload Your QR Code Image", type=['png', 'jpg', 'jpeg'])
                 
                 if qr_img is not None and st.button("✅ Submit Attendance"):
-                    status, msg = mark_attendance_qr(qr_img, current_username, action)
-                    if status: 
-                        st.success(msg)
-                        st.balloons()
-                    else: 
-                        st.error(msg)
+                    if not password:
+                        st.error("Please enter your password!")
+                    else:
+                        status, msg = mark_attendance_qr(qr_img, current_username, password, action)
+                        if status: 
+                            st.success(msg)
+                            st.balloons()
+                        else: 
+                            st.error(msg)
             
             with tab2:
                 st.subheader("📈 My Performance (Grid View)")
@@ -397,8 +415,10 @@ def main():
                 qr_path = f"qr_codes/{current_username}.png"
                 if os.path.exists(qr_path):
                     st.image(qr_path, caption="Scan this QR to mark attendance", width=200)
+                    # Fixed Download Button Error
                     with open(qr_path, "rb") as f:
-                        st.download_button("⬇️ Download My QR Code", f, file_name=f"{current_username}_qr.png")
+                        file_data = f.read()
+                    st.download_button("⬇️ Download My QR Code", file_data, file_name=f"{current_username}_qr.png")
                 else:
                     st.warning("QR Code not found. Contact your teacher.")
 
