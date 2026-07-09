@@ -63,8 +63,8 @@ def init_data():
     
     if not os.path.exists("data/users.csv"):
         df = pd.DataFrame(columns=["username", "password_hash", "role", "name"])
-        df.loc[0] = ["teacher", hash_password("teacher123"), "Teacher", "Mr. John Doe"]
-        df.loc[1] = ["student1", hash_password("student123"), "Student", "Alice Smith"]
+        df.loc[0] = ["teacher", hash_password("teacher123"), "Teacher", "Mr.najeeb"]
+        df.loc[1] = ["student1", hash_password("student123"), "Student", "Ali"]
         df.to_csv("data/users.csv", index=False)
         
     if not os.path.exists("data/attendance.csv"):
