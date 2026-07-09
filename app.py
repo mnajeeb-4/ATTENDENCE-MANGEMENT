@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 from PIL import Image
 import plotly.express as px
-import base64
 
 # --- MODERN CSS & HTML INTERFACE ---
 def load_css():
@@ -51,9 +50,6 @@ def load_css():
         margin-bottom: 20px;
         border: 1px solid #e0e0e0;
     }
-    .sidebar .sidebar-content {
-        background-image: linear-gradient(#2b5876, #4e4376);
-    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -67,7 +63,6 @@ def init_data():
     
     if not os.path.exists("data/users.csv"):
         df = pd.DataFrame(columns=["username", "password_hash", "role", "name"])
-        # Default Admin Teacher and Student
         df.loc[0] = ["teacher", hash_password("teacher123"), "Teacher", "Mr. John Doe"]
         df.loc[1] = ["student1", hash_password("student123"), "Student", "Alice Smith"]
         df.to_csv("data/users.csv", index=False)
@@ -95,41 +90,7 @@ def generate_qr(username):
     img.save(path)
     return path
 
-# --- FACE RECOGNITION (With fallback to avoid errors) ---
-def mark_attendance_face(username):
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        return False, "Camera not accessible! Please use QR Code method."
-    
-    try:
-        ret, frame = cap.read()
-        cap.release()
-        if not ret:
-            return False, "Could not read frame from camera."
-        
-        # Face detection using OpenCV Haar Cascade (Basic logic - prevents complex dlib errors)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-        faces = face_cascade.detectMultiScale(gray, 1.1, 4)
-        
-        if len(faces) > 0:
-            # Mark Attendance
-            now = time.localtime()
-            date = time.strftime("%Y-%m-%d", now)
-            t = time.strftime("%H:%M:%S", now)
-            
-            df = load_attendance()
-            new_record = pd.DataFrame([[username, date, t, "Face Recognition", "Present"]], 
-                                     columns=["username", "date", "time", "method", "status"])
-            df = pd.concat([df, new_record], ignore_index=True)
-            save_attendance(df)
-            return True, "Attendance Marked Successfully via Face!"
-        else:
-            return False, "No face detected. Please try again."
-    except Exception as e:
-        return False, f"Error in Face Module: {str(e)}"
-
-# --- MARK ATTENDANCE VIA QR CODE ---
+# --- CLOUD VERSION: QR CODE ATTENDANCE (Face Recognition hata diya gaya) ---
 def mark_attendance_qr(qr_upload, username):
     try:
         img = Image.open(qr_upload)
@@ -143,7 +104,7 @@ def mark_attendance_qr(qr_upload, username):
             t = time.strftime("%H:%M:%S", now)
             
             df = load_attendance()
-            new_record = pd.DataFrame([[username, date, t, "QR Code", "Present"]], 
+            new_record = pd.DataFrame([[username, date, t, "QR Code (Cloud)", "Present"]], 
                                      columns=["username", "date", "time", "method", "status"])
             df = pd.concat([df, new_record], ignore_index=True)
             save_attendance(df)
@@ -158,11 +119,11 @@ def main():
     load_css()
     init_data()
     
-    st.sidebar.title("📚 Attendance System")
+    st.sidebar.title("📚 Attendance System (Cloud)")
     menu = st.sidebar.selectbox("Select Login Role", ["Login", "Teacher Dashboard", "Student Dashboard"])
     
     if menu == "Login":
-        st.markdown('<div class="main-header"><h1>🎓 Attendance Management System</h1><p>Secure Authentication | Data Privacy First</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="main-header"><h1>🎓 Attendance Management System</h1><p>Secure Cloud Deployment | Use QR Codes</p></div>', unsafe_allow_html=True)
         
         with st.container():
             col1, col2, col3 = st.columns([1,2,1])
@@ -241,26 +202,17 @@ def main():
             
             with tab1:
                 st.subheader("Mark Attendance")
-                st.write("Choose your method below:")
+                st.info("Note: Cloud version supports QR Code only. Face Recognition is available in Local Version.")
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("📸 Face Recognition"):
-                        status, msg = mark_attendance_face(username)
-                        if status:
-                            st.success(msg)
-                        else:
-                            st.error(msg)
-                            
-                with col2:
-                    st.write("**OR**")
-                    qr_img = st.file_uploader("Upload QR Code Image", type=['png', 'jpg', 'jpeg'])
-                    if qr_img is not None and st.button("✅ Mark via QR"):
-                        status, msg = mark_attendance_qr(qr_img, username)
-                        if status:
-                            st.success(msg)
-                        else:
-                            st.error(msg)
+                # Face Recognition button removed entirely for cloud to avoid Camera Crash
+                
+                qr_img = st.file_uploader("Upload Your QR Code Image", type=['png', 'jpg', 'jpeg'])
+                if qr_img is not None and st.button("✅ Mark Attendance via QR"):
+                    status, msg = mark_attendance_qr(qr_img, username)
+                    if status:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
                             
             with tab2:
                 st.subheader("📈 My Attendance Statistics")
