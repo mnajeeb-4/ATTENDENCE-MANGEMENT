@@ -145,6 +145,8 @@ def teacher_dashboard():
     st.markdown(render_grid_html(), unsafe_allow_html=True)
 
 # --- 7. STUDENT DASHBOARD ---
+# Update this section in your app.py
+
 def student_dashboard():
     st.sidebar.title(f"👨‍🎓 Student: {st.session_state.full_name}")
     if st.sidebar.button("Logout"):
@@ -153,31 +155,43 @@ def student_dashboard():
         st.rerun()
 
     col1, col2 = st.columns([1, 1])
+    
     with col1:
-        st.subheader("📷 Mark Attendance via QR")
-        st.info("Upload an image of a QR code OR type your Student ID manually below.")
+        st.subheader("📷 Mark Attendance")
         
-        # QR Upload or Manual
-        uploaded_file = st.file_uploader("Upload QR Code Image", type=['png', 'jpg', 'jpeg'])
-        user_id_manual = st.text_input("Or Enter Student ID Manually:")
+        # --- Safe QR Import ---
+        try:
+            from pyzbar.pyzbar import decode
+            from PIL import Image
+            QR_AVAILABLE = True
+        except ImportError:
+            QR_AVAILABLE = False
+            # Dummy fallback so the code doesn't crash if the library fails
+            def decode(img): return []
         
-        # Process marking
+        # --- QR Code Upload (Only if library is available) ---
         user_id = None
-        if uploaded_file:
-            try:
-                img = Image.open(uploaded_file)
-                decoded_objects = decode(img)
-                if decoded_objects:
-                    user_id = decoded_objects[0].data.decode('utf-8')
-                    st.success(f"Scanned ID: {user_id}")
-                else:
-                    st.error("No QR code found in image")
-            except Exception as e:
-                st.error(f"Error reading QR: {e}")
-        elif user_id_manual:
+        if QR_AVAILABLE:
+            st.info("Upload an image of a QR code")
+            uploaded_file = st.file_uploader("Upload QR Code Image", type=['png', 'jpg', 'jpeg'])
+            if uploaded_file:
+                try:
+                    img = Image.open(uploaded_file)
+                    decoded_objects = decode(img)
+                    if decoded_objects:
+                        user_id = decoded_objects[0].data.decode('utf-8')
+                        st.success(f"Scanned ID: {user_id}")
+                    else:
+                        st.error("No QR code found in image")
+                except Exception as e:
+                    st.error(f"Error reading QR: {e}")
+        
+        # --- Manual ID Entry (Works 100% without QR!) ---
+        user_id_manual = st.text_input("Or Enter Student ID Manually:")
+        if user_id_manual:
             user_id = user_id_manual
 
-        # Offline / Online Marking logic
+        # --- Offline / Online Marking logic ---
         if st.button("Mark Attendance"):
             if not user_id:
                 st.error("Please provide a valid Student ID")
@@ -186,13 +200,11 @@ def student_dashboard():
                 if not current_user:
                     st.error("Invalid Student ID")
                 else:
-                    # Check network (simulated via st.session_state)
-                    # For offline simulation: we just add to queue and process later
                     st.session_state.offline_queue.append(int(user_id))
                     st.success("Attendance queued! (Offline mode simulated)")
                     st.rerun()
 
-        # Process offline sync (like reconnecting to internet)
+        # --- Offline Sync button ---
         if st.button("📡 Sync Pending Attendance (Simulate Internet Restore)"):
             if not st.session_state.offline_queue:
                 st.warning("No pending records")
@@ -230,7 +242,6 @@ def student_dashboard():
             fig = px.pie(chart_data, names='Status', values='Count', color='Status', 
                          color_discrete_map={'Present':'#4CAF50', 'Absent':'#f44336'})
             st.plotly_chart(fig, use_container_width=True)
-
 # --- 8. MAIN ROUTER ---
 if st.session_state.role == 'teacher':
     teacher_dashboard()
