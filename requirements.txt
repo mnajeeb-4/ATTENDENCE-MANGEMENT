@@ -1,6 +1,7 @@
 streamlit
+sqlalchemy
 pandas
-numpy
 plotly
-opencv-python-headless
-pillow
+werkzeug
+Pillow
+pyzbar
