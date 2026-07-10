@@ -1,56 +1,28 @@
 import cv2
-import base64
 import numpy as np
-from deepface import DeepFace
-from pyzbar.pyzbar import decode
-from PIL import Image
-import io
 
-def encode_face(image_bytes):
-    # DeepFace doesn't have a manual encoder like dlib. 
-    # We rely on the model extracting a face, so we just return a "yes" flag 
-    # indicating the face was detected and can be stored in the DB.
+def verify_face_capture(image_bytes):
+    """
+    Takes image bytes from st.camera_input, decodes it, and verifies if a face is present.
+    Returns a dictionary {verified: bool, message: str}.
+    """
     try:
-        img = Image.open(io.BytesIO(image_bytes))
-        img = np.array(img)
-        # Detect if a face exists
-        faces = DeepFace.extract_faces(img, enforce_detection=True)
-        if faces:
-            # For the database, we store the bytes directly or a placeholder string 
-            # since DeepFace handles verification on the fly with numpy arrays.
-            return base64.b64encode(image_bytes).decode()
-    except Exception as e:
-        return None
-    return None
-
-def verify_face(stored_encoding_b64, image_bytes):
-    if not stored_encoding_b64:
-        return False
-    try:
-        # Decode the stored image bytes
-        stored_bytes = base64.b64decode(stored_encoding_b64)
-        stored_img = Image.open(io.BytesIO(stored_bytes))
-        stored_array = np.array(stored_img)
-
-        # Decode the input image
-        input_img = Image.open(io.BytesIO(image_bytes))
-        input_array = np.array(input_img)
-
-        # Perform verification
-        result = DeepFace.verify(
-            img1_path=input_array,
-            img2_path=stored_array,
-            enforce_detection=False,
-            model_name="VGG-Face"
+        # Convert bytes to numpy array
+        np_arr = np.frombuffer(image_bytes, np.uint8)
+        # Decode image
+        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        
+        # Load pre-trained Haar Cascade for face detection
+        face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
         )
-        return result["verified"]
-    except Exception:
-        return False
-
-def scan_qr_code(image_bytes):
-    img = Image.open(io.BytesIO(image_bytes))
-    img = np.array(img)
-    decoded_objects = decode(img)
-    for obj in decoded_objects:
-        return obj.data.decode('utf-8')
-    return None
+        
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+        
+        if len(faces) > 0:
+            return {"verified": True, "message": "Face verified successfully!"}
+        else:
+            return {"verified": False, "message": "No face detected. Please try again."}
+    except Exception as e:
+        return {"verified": False, "message": f"Error during verification: {str(e)}"}
