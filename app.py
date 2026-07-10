@@ -75,21 +75,6 @@ def init_session_state():
     if 'data' not in st.session_state:
         st.session_state.data = load_data()
 
-def login():
-    st.subheader("🔐 Secure Authentication")
-    username = st.text_input("Username (e.g., S001 or T001)")
-    password = st.text_input("Password", type="password")
-    
-    if st.button("Login"):
-        users = st.session_state.data['users']
-        pass_hash = hashlib.sha256(password.encode()).hexdigest()
-        for user in users:
-            if (user['student_id'] == username or user['id'] == username) and user['password'] == pass_hash:
-                st.session_state.logged_in_user = user
-                st.success(f"Welcome, {user['name']}!")
-                st.rerun()
-        st.error("Invalid credentials")
-
 def logout():
     if st.sidebar.button("🚪 Logout"):
         st.session_state.logged_in_user = None
