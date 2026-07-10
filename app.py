@@ -1,8 +1,7 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 import calendar
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -10,7 +9,6 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from models import Base, User, Attendance
 import io
 from PIL import Image
-from pyzbar.pyzbar import decode
 
 # --- 1. DATABASE SETUP (SQLite for simplicity) ---
 engine = create_engine('sqlite:///ams.db')
@@ -65,17 +63,13 @@ def teacher_dashboard():
     st.header("📊 Attendance Grid")
     current_user = db.query(User).filter_by(id=st.session_state.user_id).first()
     
-    # Get students from teacher's class only (RBAC)
     students = db.query(User).filter_by(role='student', class_name=current_user.class_name).all()
     
     today = date.today()
     year, month = today.year, today.month
     
-    # --- 6. RENDER GRID WITH CUSTOM HTML & TOOLTIPS ---
     def render_grid_html():
-        # Get month details
         num_days = calendar.monthrange(year, month)[1]
-        
         html = """
         <style>
             .grid-table { border-collapse: collapse; width: 100%; font-family: Arial; font-size: 12px; }
@@ -85,22 +79,10 @@ def teacher_dashboard():
             .status-A { background-color: #f8d7da; color: #721c24; }
             .status-WK { background-color: #f1f1f1; color: #666; }
             .status-HL { background-color: #fff3cd; color: #856404; }
-            
-            /* Tooltip CSS */
             .hover-tooltip {
-                position: absolute;
-                background: #333;
-                color: #fff;
-                padding: 8px 10px;
-                border-radius: 4px;
-                display: none;
-                width: 160px;
-                text-align: left;
-                font-size: 11px;
-                top: 25px;
-                left: -40px;
-                z-index: 100;
-                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                position: absolute; background: #333; color: #fff; padding: 8px 10px;
+                border-radius: 4px; display: none; width: 160px; text-align: left;
+                font-size: 11px; top: 25px; left: -40px; z-index: 100; box-shadow: 0 2px 5px rgba(0,0,0,0.2);
             }
             .grid-table td:hover .hover-tooltip { display: block; }
         </style>
@@ -119,7 +101,6 @@ def teacher_dashboard():
                 
                 if record:
                     status_class = f"status-{record.status}"
-                    # Tooltip logic
                     tooltip_data = f"""
                     <div class='hover-tooltip'>
                         <b>IN:</b> {record.in_time.strftime('%I:%M %p') if record.in_time else '-'}<br>
@@ -132,7 +113,6 @@ def teacher_dashboard():
                     html += f"{record.status}" + tooltip_data
                     html += "</td>"
                 else:
-                    # Weekend logic
                     if dt.weekday() >= 5:
                         html += f"<td class='status-WK'>WK</td>"
                     else:
@@ -141,12 +121,9 @@ def teacher_dashboard():
         html += "</tbody></table>"
         return html
 
-    # Display the grid
     st.markdown(render_grid_html(), unsafe_allow_html=True)
 
-# --- 7. STUDENT DASHBOARD ---
-# Update this section in your app.py
-
+# --- 6. STUDENT DASHBOARD ---
 def student_dashboard():
     st.sidebar.title(f"👨‍🎓 Student: {st.session_state.full_name}")
     if st.sidebar.button("Logout"):
@@ -159,21 +136,18 @@ def student_dashboard():
     with col1:
         st.subheader("📷 Mark Attendance")
         
-        # --- Safe QR Import ---
+        # --- Safe QR Scanner (Ab app kabhi nahi tootega!) ---
+        QR_AVAILABLE = False
         try:
             from pyzbar.pyzbar import decode
-            from PIL import Image
             QR_AVAILABLE = True
         except ImportError:
-            QR_AVAILABLE = False
-            # Dummy fallback so the code doesn't crash if the library fails
-            def decode(img): return []
-        
-        # --- QR Code Upload (Only if library is available) ---
+            decode = None # Fallback
+
         user_id = None
         if QR_AVAILABLE:
-            st.info("Upload an image of a QR code")
-            uploaded_file = st.file_uploader("Upload QR Code Image", type=['png', 'jpg', 'jpeg'])
+            st.info("Scanning via QR Code")
+            uploaded_file = st.file_uploader("Upload QR Image", type=['png', 'jpg', 'jpeg'])
             if uploaded_file:
                 try:
                     img = Image.open(uploaded_file)
@@ -182,16 +156,17 @@ def student_dashboard():
                         user_id = decoded_objects[0].data.decode('utf-8')
                         st.success(f"Scanned ID: {user_id}")
                     else:
-                        st.error("No QR code found in image")
+                        st.error("No QR code found")
                 except Exception as e:
                     st.error(f"Error reading QR: {e}")
-        
-        # --- Manual ID Entry (Works 100% without QR!) ---
-        user_id_manual = st.text_input("Or Enter Student ID Manually:")
+        else:
+            st.warning("⚠️ QR Module missing. Use Manual Entry below.")
+
+        # --- Manual ID Entry (100% Kaam karega) ---
+        user_id_manual = st.text_input("Enter Student ID Manually:")
         if user_id_manual:
             user_id = user_id_manual
 
-        # --- Offline / Online Marking logic ---
         if st.button("Mark Attendance"):
             if not user_id:
                 st.error("Please provide a valid Student ID")
@@ -204,8 +179,7 @@ def student_dashboard():
                     st.success("Attendance queued! (Offline mode simulated)")
                     st.rerun()
 
-        # --- Offline Sync button ---
-        if st.button("📡 Sync Pending Attendance (Simulate Internet Restore)"):
+        if st.button("📡 Sync Pending Attendance"):
             if not st.session_state.offline_queue:
                 st.warning("No pending records")
             else:
@@ -222,7 +196,7 @@ def student_dashboard():
                     db.add(att)
                     db.commit()
                 st.session_state.offline_queue = []
-                st.success(f"Synced {len(st.session_state.offline_queue)} records!")
+                st.success("Sync Successful! Records added to database.")
                 st.rerun()
 
     with col2:
@@ -242,7 +216,8 @@ def student_dashboard():
             fig = px.pie(chart_data, names='Status', values='Count', color='Status', 
                          color_discrete_map={'Present':'#4CAF50', 'Absent':'#f44336'})
             st.plotly_chart(fig, use_container_width=True)
-# --- 8. MAIN ROUTER ---
+
+# --- 7. MAIN ROUTER ---
 if st.session_state.role == 'teacher':
     teacher_dashboard()
 elif st.session_state.role == 'student':
