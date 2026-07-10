@@ -1,376 +1,238 @@
+# app.py
 import streamlit as st
-import json
-import os
-import hashlib
-import datetime
 import pandas as pd
-import plotly.graph_objects as go
 import plotly.express as px
-from utils.face_utils import verify_face_capture
+from datetime import datetime, date, timedelta
+import calendar
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from werkzeug.security import generate_password_hash, check_password_hash
+from models import Base, User, Attendance
+import io
+from PIL import Image
+from pyzbar.pyzbar import decode
 
-# --- DATA LAYER ---
-DATA_FILE = 'data.json'
+# --- 1. DATABASE SETUP (SQLite for simplicity) ---
+engine = create_engine('sqlite:///ams.db')
+Base.metadata.create_all(engine)
+Session = sessionmaker(bind=engine)
+db = Session()
 
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return init_data()
-    with open(DATA_FILE, 'r') as f:
-        return json.load(f)
+# --- 2. SEED TEST DATA (Run only once) ---
+if not db.query(User).filter_by(username='teacher1').first():
+    db.add(User(username='teacher1', password=generate_password_hash('123'), role='teacher', full_name='Mr. Smith', class_name='Class A'))
+    db.add(User(username='student1', password=generate_password_hash('123'), role='student', full_name='John Doe', class_name='Class A'))
+    db.commit()
 
-def save_data(data):
-    with open(DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=4)
+# --- 3. STREAMLIT APP START ---
+st.set_page_config(layout="wide", page_title="AMS System")
 
-def init_data():
-    # Pre-populate with mock data to visualize the grid immediately
-    mock_data = {
-        "users": [
-            {"id": "T001", "name": "Mr. Arham", "role": "teacher", "password": hashlib.sha256("teacher123".encode()).hexdigest(), "department": "CS", "course": "CS101"},
-            {"id": "S001", "name": "Mark Wood", "role": "student", "password": hashlib.sha256("student123".encode()).hexdigest(), "department": "CS", "student_id": "S001", "course": "CS101"},
-            {"id": "S002", "name": "John Doe", "role": "student", "password": hashlib.sha256("student123".encode()).hexdigest(), "department": "IT", "student_id": "S002", "course": "IT101"},
-            {"id": "S003", "name": "Meaghan Campigotto", "role": "student", "password": hashlib.sha256("student123".encode()).hexdigest(), "department": "CS", "student_id": "S003", "course": "CS101"},
-            {"id": "S004", "name": "Tri Chan", "role": "student", "password": hashlib.sha256("student123".encode()).hexdigest(), "department": "CS", "student_id": "S004", "course": "CS101"},
-            {"id": "S005", "name": "Evander Deocareza", "role": "student", "password": hashlib.sha256("student123".encode()).hexdigest(), "department": "CS", "student_id": "S005", "course": "CS101"},
-            {"id": "S006", "name": "Karen Frekko", "role": "student", "password": hashlib.sha256("student123".encode()).hexdigest(), "department": "IT", "student_id": "S006", "course": "IT101"},
-            {"id": "S007", "name": "Magdalena Gonzalez", "role": "student", "password": hashlib.sha256("student123".encode()).hexdigest(), "department": "IT", "student_id": "S007", "course": "IT101"}
-        ],
-        "attendance": [],
-        "classes": [
-            {"teacher_id": "T001", "course": "CS101", "student_ids": ["S001", "S003", "S004", "S005"]},
-            {"teacher_id": "T001", "course": "IT101", "student_ids": ["S002", "S006", "S007"]}
-        ]
-    }
-    
-    # Add mock attendance for the past month to populate the grid
-    today = datetime.date.today()
-    base_date = today.replace(day=1)
-    import random
-    statuses = ['P', 'P', 'P', 'A', 'HL', 'P', 'P']
-    in_time = ["09:00", "09:15", "10:00", "-", "09:00", "09:05", "09:30"]
-    out_time = ["17:00", "17:00", "18:00", "-", "13:00", "17:00", "17:00"]
-    for student in mock_data["users"]:
-        if student["role"] == "student":
-            for day in range(1, 28): # fill up to the 27th
-                date_str = f"{base_date.year}-{base_date.month:02d}-{day:02d}"
-                idx = random.randint(0, len(statuses)-1)
-                mock_data["attendance"].append({
-                    "student_id": student["student_id"],
-                    "date": date_str,
-                    "status": statuses[idx],
-                    "in_time": in_time[idx],
-                    "out_time": out_time[idx],
-                    "remarks": ""
-                })
-    save_data(mock_data)
-    return mock_data
+# --- 4. AUTHENTICATION ---
+if 'user_id' not in st.session_state:
+    st.session_state.user_id = None
+if 'offline_queue' not in st.session_state:
+    st.session_state.offline_queue = [] # For offline mode
 
-# --- AUTHENTICATION & SESSION STATE ---
-def init_session_state():
-    if 'logged_in_user' not in st.session_state:
-        st.session_state.logged_in_user = None
-    if 'offline_mode' not in st.session_state:
-        st.session_state.offline_mode = False
-    if 'offline_buffer' not in st.session_state:
-        st.session_state.offline_buffer = []
-    if 'data' not in st.session_state:
-        st.session_state.data = load_data()
+def login():
+    st.title("Attendance Management System")
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login"):
+            user = db.query(User).filter_by(username=username).first()
+            if user and check_password_hash(user.password, password):
+                st.session_state.user_id = user.id
+                st.session_state.role = user.role
+                st.session_state.full_name = user.full_name
+                st.session_state.class_name = user.class_name
+                st.rerun()
+            else:
+                st.error("Invalid credentials")
 
-def logout():
-    if st.sidebar.button("🚪 Logout"):
-        st.session_state.logged_in_user = None
+if st.session_state.user_id is None:
+    login()
+    st.stop()
+
+# --- 5. TEACHER DASHBOARD ---
+def teacher_dashboard():
+    st.sidebar.title(f"👨‍🏫 Teacher: {st.session_state.full_name}")
+    if st.sidebar.button("Logout"):
+        for key in ['user_id', 'role', 'full_name', 'class_name']:
+            st.session_state.pop(key)
         st.rerun()
 
-# --- STUDENT FEATURES ---
-def student_app(user):
-    st.title(f"👨‍🎓 Student Portal - {user['name']}")
+    st.header("📊 Attendance Grid")
+    current_user = db.query(User).filter_by(id=st.session_state.user_id).first()
     
-    # Offline Mode Toggle
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        offline_toggle = st.toggle("📶 Offline Mode", value=st.session_state.offline_mode)
-        if offline_toggle != st.session_state.offline_mode:
-            st.session_state.offline_mode = offline_toggle
-            if not offline_toggle and st.session_state.offline_buffer:
-                sync_offline_data(user)
-                st.success("Synced offline data!")
-                st.rerun()
-
-    if st.session_state.offline_mode:
-        st.warning("You are in OFFLINE mode. Attendance will be stored locally and synced later.")
-
-    tab1, tab2 = st.tabs(["📝 Mark Attendance", "📊 My Statistics"])
-
-    with tab1:
-        st.subheader("Select Attendance Method")
-        method = st.radio("Method", ["Face Recognition", "QR Code Scanning", "Fingerprint Scanning"])
+    # Get students from teacher's class only (RBAC)
+    students = db.query(User).filter_by(role='student', class_name=current_user.class_name).all()
+    
+    today = date.today()
+    year, month = today.year, today.month
+    
+    # --- 6. RENDER GRID WITH CUSTOM HTML & TOOLTIPS ---
+    def render_grid_html():
+        # Get month details
+        num_days = calendar.monthrange(year, month)[1]
         
-        if method == "Face Recognition":
-            img_file = st.camera_input("Take a snapshot")
-            if img_file:
-                if st.button("Verify Face & Mark Attendance"):
-                    result = verify_face_capture(img_file.read())
-                    if result["verified"]:
-                        mark_attendance(user, "Face Recognition")
-                    else:
-                        st.error(result["message"])
-        
-        elif method == "QR Code Scanning":
-            # Simulated QR parsing (avoiding external OS-dependent binaries for 0% cloud error)
-            qr_upload = st.file_uploader("Upload QR Code Screenshot", type=["png", "jpg", "jpeg"])
-            if qr_upload and st.button("Submit QR Code"):
-                # Mock QR processing (Student ID captured from QR)
-                st.success("QR Code scanned successfully! Validating...")
-                mark_attendance(user, "QR Code")
-        
-        elif method == "Fingerprint Scanning":
-            # Simulated biometric hardware integration
-            if st.button("Scan Fingerprint (Simulated)"):
-                mark_attendance(user, "Fingerprint Scanning")
-
-    with tab2:
-        # Show personal analytics
-        attendances = [a for a in st.session_state.data['attendance'] if a['student_id'] == user['student_id']]
-        if attendances:
-            df = pd.DataFrame(attendances)
-            df['date'] = pd.to_datetime(df['date'])
-            status_counts = df['status'].value_counts()
+        html = """
+        <style>
+            .grid-table { border-collapse: collapse; width: 100%; font-family: Arial; font-size: 12px; }
+            .grid-table th, .grid-table td { border: 1px solid #ddd; padding: 4px; text-align: center; min-width: 25px; position: relative; }
+            .grid-table th { background-color: #f2f2f2; font-weight: bold; }
+            .status-P { background-color: #d4edda; color: #155724; }
+            .status-A { background-color: #f8d7da; color: #721c24; }
+            .status-WK { background-color: #f1f1f1; color: #666; }
+            .status-HL { background-color: #fff3cd; color: #856404; }
             
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                fig = px.pie(values=status_counts.values, names=status_counts.index, title="Attendance Distribution")
-                st.plotly_chart(fig, use_container_width=True)
-            with col2:
-                # Daily trend
-                fig2 = px.line(df, x='date', y='status', title="Attendance Timeline")
-                st.plotly_chart(fig2, use_container_width=True)
-        else:
-            st.info("No attendance records found.")
+            /* Tooltip CSS */
+            .hover-tooltip {
+                position: absolute;
+                background: #333;
+                color: #fff;
+                padding: 8px 10px;
+                border-radius: 4px;
+                display: none;
+                width: 160px;
+                text-align: left;
+                font-size: 11px;
+                top: 25px;
+                left: -40px;
+                z-index: 100;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            }
+            .grid-table td:hover .hover-tooltip { display: block; }
+        </style>
+        <table class="grid-table">
+            <thead><tr><th>Name</th>
+        """
+        for d in range(1, num_days+1):
+            html += f"<th>{d:02d}</th>"
+        html += "</tr></thead><tbody>"
 
-def mark_attendance(user, method):
-    today = datetime.date.today().isoformat()
-    record = {
-        "student_id": user['student_id'],
-        "date": today,
-        "status": "P",
-        "in_time": datetime.datetime.now().strftime("%H:%M"),
-        "out_time": "-",
-        "remarks": f"Marked via {method}"
-    }
-    
-    if st.session_state.offline_mode:
-        st.session_state.offline_buffer.append(record)
-        st.success("✅ Attendance recorded locally! (Offline Mode)")
-    else:
-        # Write to main data
-        data = st.session_state.data
-        # Avoid duplicates for the same day
-        existing = next((a for a in data['attendance'] if a['student_id'] == user['student_id'] and a['date'] == today), None)
-        if not existing:
-            data['attendance'].append(record)
-            save_data(data)
-            st.session_state.data = data
-            st.success(f"✅ Attendance marked as PRESENT via {method}!")
-        else:
-            st.info("Attendance already marked for today.")
-
-def sync_offline_data(user):
-    if st.session_state.offline_buffer:
-        data = st.session_state.data
-        for rec in st.session_state.offline_buffer:
-            # Check if already present
-            existing = next((a for a in data['attendance'] if a['student_id'] == rec['student_id'] and a['date'] == rec['date']), None)
-            if not existing:
-                data['attendance'].append(rec)
-        save_data(data)
-        st.session_state.data = data
-        st.session_state.offline_buffer = []
-
-# --- TEACHER FEATURES ---
-def teacher_app(user):
-    st.title(f"👨‍🏫 Teacher Portal - {user['name']}")
-    logout()
-    
-    # Get students belonging to the teacher's class (Data Privacy Enforcement)
-    students_in_class = []
-    for cls in st.session_state.data['classes']:
-        if cls['teacher_id'] == user['id']:
-            students_in_class = cls['student_ids']
-            break
-    filtered_students = [u for u in st.session_state.data['users'] if u['role'] == 'student' and u['student_id'] in students_in_class]
-    
-    tab1, tab2, tab3 = st.tabs(["👥 Student Management", "📅 Attendance Grid", "📈 Analytics"])
-
-    with tab1:
-        st.subheader("Manage Student Records")
-        action = st.selectbox("Action", ["Add Student", "Update Student", "Delete Student"])
-        
-        if action == "Add Student":
-            with st.form("add_form"):
-                s_name = st.text_input("Full Name")
-                s_id = st.text_input("Student ID")
-                s_department = st.text_input("Department")
-                s_course = user['course'] # Enroll in teacher's class
-                if st.form_submit_button("Add"):
-                    new_student = {
-                        "id": s_id, "name": s_name, "role": "student", "student_id": s_id,
-                        "department": s_department, "course": s_course,
-                        "password": hashlib.sha256("student123".encode()).hexdigest()
-                    }
-                    data = st.session_state.data
-                    data['users'].append(new_student)
-                    # Update class list
-                    for cls in data['classes']:
-                        if cls['teacher_id'] == user['id']:
-                            cls['student_ids'].append(s_id)
-                            break
-                    save_data(data)
-                    st.session_state.data = data
-                    st.success("Student added successfully!")
-                    st.rerun()
-        
-        elif action == "Update Student":
-            selected = st.selectbox("Select Student", [u['name'] for u in filtered_students])
-            if selected:
-                stu = next((u for u in filtered_students if u['name'] == selected), None)
-                with st.form("update_form"):
-                    new_name = st.text_input("Name", value=stu['name'])
-                    new_dept = st.text_input("Department", value=stu['department'])
-                    if st.form_submit_button("Update"):
-                        stu['name'] = new_name
-                        stu['department'] = new_dept
-                        save_data(st.session_state.data)
-                        st.success("Student updated!")
-                        st.rerun()
-        
-        elif action == "Delete Student":
-            selected = st.selectbox("Select Student to Delete", [u['name'] for u in filtered_students])
-            if st.button(f"Delete {selected}"):
-                data = st.session_state.data
-                to_del = next(u for u in data['users'] if u['name'] == selected)
-                data['users'].remove(to_del)
-                # Remove from class
-                for cls in data['classes']:
-                    if cls['teacher_id'] == user['id']:
-                        if to_del['student_id'] in cls['student_ids']:
-                            cls['student_ids'].remove(to_del['student_id'])
-                        break
-                save_data(data)
-                st.session_state.data = data
-                st.success("Student deleted!")
-                st.rerun()
-
-    with tab2:
-        st.subheader("Interactive Attendance Grid")
-        
-        # Filters
-        c1, c2 = st.columns(2)
-        with c1:
-            selected_student = st.selectbox("Filter Student", ["All"] + [u['name'] for u in filtered_students])
-        with c2:
-            status_filter = st.selectbox("Filter Status", ["All", "Present", "Absent", "Half Leave", "Weekend"])
-
-        # Prepare data for the Heatmap
-        start_date = datetime.date.today().replace(day=1)
-        days_in_month = (datetime.date(start_date.year, start_date.month % 12 + 1, 1) - datetime.timedelta(days=1)).day
-        dates = [f"{start_date.month:02d}-{d:02d}" for d in range(1, days_in_month + 1)]
-        
-        # Filter students
-        display_students = filtered_students if selected_student == "All" else [next(u for u in filtered_students if u['name'] == selected_student)]
-        
-        # Build Matrix
-        matrix_z = [] # 0=A, 1=P, 2=HL, 3=WK
-        matrix_text = [] # P, A, HL, WK
-        hover_text = []
-        
-        for stu in display_students:
-            z_row, text_row, hover_row = [], [], []
-            for day_str in dates:
-                full_date = f"{start_date.year}-{start_date.month:02d}-{day_str.split('-')[1]}"
-                # Check for weekend (Simulate based on day index)
-                day_num = int(day_str.split('-')[1])
-                if (start_date.weekday() + day_num - 1) % 7 >= 5:
-                    z_row.append(3)
-                    text_row.append("WK")
-                    hover_row.append("Weekend")
+        for student in students:
+            html += f"<tr><td style='font-weight:bold; text-align:left;'>{student.full_name}</td>"
+            for d in range(1, num_days+1):
+                dt = date(year, month, d)
+                record = db.query(Attendance).filter_by(user_id=student.id, date=dt).first()
+                
+                if record:
+                    status_class = f"status-{record.status}"
+                    # Tooltip logic
+                    tooltip_data = f"""
+                    <div class='hover-tooltip'>
+                        <b>IN:</b> {record.in_time.strftime('%I:%M %p') if record.in_time else '-'}<br>
+                        <b>OUT:</b> {record.out_time.strftime('%I:%M %p') if record.out_time else '-'}<br>
+                        <b>Total Hrs:</b> {record.total_hours}H<br>
+                        <b>Late Hrs:</b> {record.late_hours}H
+                    </div>
+                    """
+                    html += f"<td class='{status_class}'>"
+                    html += f"{record.status}" + tooltip_data
+                    html += "</td>"
                 else:
-                    # Find record
-                    record = next((a for a in st.session_state.data['attendance'] if a['student_id'] == stu['student_id'] and a['date'] == full_date), None)
-                    if record:
-                        if record['status'] == 'P':
-                            z_row.append(1); text_row.append("P")
-                            hover_row.append(f"IN: {record['in_time']}<br>OUT: {record['out_time']}")
-                        elif record['status'] == 'A':
-                            z_row.append(0); text_row.append("A")
-                            hover_row.append("Absent")
-                        elif record['status'] == 'HL':
-                            z_row.append(2); text_row.append("HL")
-                            hover_row.append("Half Leave")
-                        else:
-                            z_row.append(1); text_row.append("P")
-                            hover_row.append("Present")
+                    # Weekend logic
+                    if dt.weekday() >= 5:
+                        html += f"<td class='status-WK'>WK</td>"
                     else:
-                        z_row.append(0); text_row.append("A")
-                        hover_row.append("Absent")
-            matrix_z.append(z_row)
-            matrix_text.append(text_row)
-            hover_text.append(hover_row)
-            
-        # Create the exact visual grid matching your image
-        fig = go.Figure(data=go.Heatmap(
-            z=matrix_z,
-            x=dates,
-            y=[u['name'] for u in display_students],
-            text=matrix_text,
-            texttemplate="%{text}",
-            textfont={"size": 12, "weight": "bold"},
-            colorscale=[
-                [0, '#ffcccc'],   # Absent (Red)
-                [0.33, '#ccffcc'],# Present (Green)
-                [0.66, '#ccccff'],# Half Leave (Blue)
-                [1, '#f0f0f0']    # Weekend (Gray)
-            ],
-            showscale=False,
-            hovertemplate="<b>%{y}</b><br>Date: %{x}<br>Status: %{text}<br>Details: %{customdata}<extra></extra>",
-            customdata=hover_text
-        ))
+                        html += f"<td class='status-A'>A</td>"
+            html += "</tr>"
+        html += "</tbody></table>"
+        return html
+
+    # Display the grid
+    st.markdown(render_grid_html(), unsafe_allow_html=True)
+
+# --- 7. STUDENT DASHBOARD ---
+def student_dashboard():
+    st.sidebar.title(f"👨‍🎓 Student: {st.session_state.full_name}")
+    if st.sidebar.button("Logout"):
+        for key in ['user_id', 'role', 'full_name', 'class_name']:
+            st.session_state.pop(key)
+        st.rerun()
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.subheader("📷 Mark Attendance via QR")
+        st.info("Upload an image of a QR code OR type your Student ID manually below.")
         
-        fig.update_layout(
-            title=f"Attendance - {start_date.strftime('%B %Y')}",
-            xaxis=dict(tickangle=-45, gridcolor='lightgray', showgrid=True),
-            yaxis=dict(gridcolor='lightgray', showgrid=True),
-            height=max(400, len(display_students)*40),
-            margin=dict(l=50, r=50, t=50, b=50)
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        # QR Upload or Manual
+        uploaded_file = st.file_uploader("Upload QR Code Image", type=['png', 'jpg', 'jpeg'])
+        user_id_manual = st.text_input("Or Enter Student ID Manually:")
+        
+        # Process marking
+        user_id = None
+        if uploaded_file:
+            try:
+                img = Image.open(uploaded_file)
+                decoded_objects = decode(img)
+                if decoded_objects:
+                    user_id = decoded_objects[0].data.decode('utf-8')
+                    st.success(f"Scanned ID: {user_id}")
+                else:
+                    st.error("No QR code found in image")
+            except Exception as e:
+                st.error(f"Error reading QR: {e}")
+        elif user_id_manual:
+            user_id = user_id_manual
 
-    with tab3:
-        st.subheader("Class Analytics")
-        attendance_data = [a for a in st.session_state.data['attendance'] if a['student_id'] in [s['student_id'] for s in filtered_students]]
-        if attendance_data:
-            df = pd.DataFrame(attendance_data)
-            df['date'] = pd.to_datetime(df['date'])
-            pivot = df.groupby(['date', 'status']).size().reset_index(name='count')
-            fig = px.bar(pivot, x="date", y="count", color="status", title="Daily Attendance Summary")
-            st.plotly_chart(fig, use_container_width=True)
+        # Offline / Online Marking logic
+        if st.button("Mark Attendance"):
+            if not user_id:
+                st.error("Please provide a valid Student ID")
+            else:
+                current_user = db.query(User).filter_by(id=int(user_id)).first()
+                if not current_user:
+                    st.error("Invalid Student ID")
+                else:
+                    # Check network (simulated via st.session_state)
+                    # For offline simulation: we just add to queue and process later
+                    st.session_state.offline_queue.append(int(user_id))
+                    st.success("Attendance queued! (Offline mode simulated)")
+                    st.rerun()
+
+        # Process offline sync (like reconnecting to internet)
+        if st.button("📡 Sync Pending Attendance (Simulate Internet Restore)"):
+            if not st.session_state.offline_queue:
+                st.warning("No pending records")
+            else:
+                for uid in st.session_state.offline_queue:
+                    today = date.today()
+                    att = Attendance(
+                        user_id=uid,
+                        date=today,
+                        status='P',
+                        in_time=datetime.now().time(),
+                        total_hours=9.0,
+                        late_hours=0.0
+                    )
+                    db.add(att)
+                    db.commit()
+                st.session_state.offline_queue = []
+                st.success(f"Synced {len(st.session_state.offline_queue)} records!")
+                st.rerun()
+
+    with col2:
+        st.subheader("📈 My Personal Stats")
+        current_user = db.query(User).filter_by(id=st.session_state.user_id).first()
+        records = db.query(Attendance).filter_by(user_id=current_user.id).all()
+        present = len([r for r in records if r.status == 'P'])
+        absent = len([r for r in records if r.status == 'A'])
+        
+        if present == 0 and absent == 0:
+            st.info("No attendance records yet.")
         else:
-            st.info("No attendance data available yet.")
+            chart_data = pd.DataFrame({
+                'Status': ['Present', 'Absent'],
+                'Count': [present, absent]
+            })
+            fig = px.pie(chart_data, names='Status', values='Count', color='Status', 
+                         color_discrete_map={'Present':'#4CAF50', 'Absent':'#f44336'})
+            st.plotly_chart(fig, use_container_width=True)
 
-# --- MAIN APP EXECUTOR ---
-def main():
-    st.set_page_config(page_title="University AMS", layout="wide")
-    st.markdown("<h1 style='text-align: center; color: #2E86C1;'>🎓 ATTENDANCE MANAGEMENT SYSTEM</h1>", unsafe_allow_html=True)
-    
-    init_session_state()
-    
-    # Data Privacy: Enforce login
-    if not st.session_state.logged_in_user:
-        login()
-    else:
-        user = st.session_state.logged_in_user
-        if user['role'] == 'teacher':
-            teacher_app(user)
-        elif user['role'] == 'student':
-            student_app(user)
-
-if __name__ == "__main__":
-    main()
+# --- 8. MAIN ROUTER ---
+if st.session_state.role == 'teacher':
+    teacher_dashboard()
+elif st.session_state.role == 'student':
+    student_dashboard()
