@@ -2,10 +2,8 @@ import streamlit as st
 import pandas as pd
 import datetime
 import random
-import time
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
-from sqlalchemy.orm import sessionmaker
 import plotly.express as px
+from sqlalchemy.orm import sessionmaker
 
 from models import User, Student, Attendance, SessionLocal, engine, Base
 from auth import init_auth, login_user, logout_user, create_user
@@ -58,7 +56,6 @@ if st.session_state.logged_in:
         tab1, tab2, tab3 = st.tabs(["📊 Attendance Grid", "👨‍🏫 Manage Students", "📈 Analytics"])
         
         with tab1:
-            # Simulating the exact grid from your provided image
             st.subheader("📅 Class Attendance Tracker")
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -73,20 +70,18 @@ if st.session_state.logged_in:
             query = db.query(User).filter(User.role == 'STUDENT')
             if selected_class != "All":
                 query = query.filter(User.class_id == selected_class)
-            students = query.all()
+            students = query.all() # <--- This creates the 'students' variable
             
             if students:
                 days_in_month = (selected_month.replace(month=selected_month.month % 12 + 1, day=1) - datetime.timedelta(days=1)).day
-                headers = ["Student Name"] + [f"{i:02d}" for i in range(1, days_in_month + 1)]
                 
                 rows = []
-                for student in users:
+                for student in students: # <--- FIXED: Changed 'users' to 'students'
                     student_record = db.query(Student).filter(Student.user_id == student.id).first()
                     row = {"Student Name": student.full_name}
                     for day in range(1, days_in_month + 1):
                         d = selected_month.replace(day=day)
-                        # Generate random data for demo (Replace with DB query in prod)
-                        # Weekends check
+                        # Generate random dummy data for demo
                         if d.weekday() >= 5:
                             status = "WK" # Weekend
                         else:
@@ -106,7 +101,6 @@ if st.session_state.logged_in:
                 
                 st.dataframe(df.style.map(style_status), use_container_width=True, height=500)
                 
-                # Simulating the Tooltip hover effect
                 st.info("💡 Hover over the data points above. In production, a detailed hover shows `IN: 09:30 AM`, `OUT: 04:45 PM`, `Total Hours`.")
             else:
                 st.warning("No students found in this class.")
@@ -132,8 +126,6 @@ if st.session_state.logged_in:
 
         with tab3:
             st.subheader("📊 Class Analytics")
-            # Fetch data for chart
-            # In a real scenario, join attendance and user tables
             statuses = ['Present', 'Absent', 'Half Leave']
             counts = [40, 15, 5] # Dummy data
             fig = px.pie(values=counts, names=statuses, title="Class Attendance Distribution")
@@ -147,7 +139,6 @@ if st.session_state.logged_in:
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("📌 My Attendance (This Month)")
-            # Fetch dummy stats for the student
             df_att = pd.DataFrame({
                 "Date": pd.date_range(start=datetime.date.today().replace(day=1), periods=30),
                 "Status": [random.choice(["P", "A", "HL"]) for _ in range(30)]
@@ -160,11 +151,14 @@ if st.session_state.logged_in:
             method = st.radio("Select Method", ["Face Recognition", "QR Code"])
             
             if method == "Face Recognition":
-                # Using webrtc for streamlit
-                webrtc_streamer(key="face_recognition", video_transformer_factory=lambda: VideoTransformerBase())
-                st.caption("Note: This requires a webcam. In demo mode, it simulates encoding check.")
+                # We removed the buggy WebRTC call here to prevent crashes on Windows.
+                # Using a dummy placeholder image instead for the demo.
+                st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/9/9e/Blue_face_icon.svg/2048px-Blue_face_icon.svg.png", width=100)
+                st.write("📸 Webcam Feed (Simulated)")
+                
                 if st.button("Simulate Face Scan Pass"):
                     st.success("✅ Face Verified! Attendance Marked for today.")
+            
             elif method == "QR Code":
                 st.write("📱 Open your student ID QR code on your phone.")
                 qr_input = st.text_input("Paste QR Code Text (or simulate ID)")
