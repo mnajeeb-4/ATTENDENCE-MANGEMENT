@@ -279,7 +279,9 @@ def student_tab_stats(student_id: int):
             """, (student_id,))
             trends = cursor.fetchall()
             if trends:
-                df = pd.DataFrame(trends)
+                # FIX IS RIGHT HERE: Explicit dict conversion before DataFrame construction
+                df = pd.DataFrame([dict(row) for row in trends]) 
+                
                 df['status_val'] = df['status'].map({'Present': 1, 'Leave': 0.5, 'Absent': 0})
                 fig2 = px.line(df, x='date', y='status_val', title='Attendance Trend (1=Present, 0.5=Leave, 0=Absent)',
                               markers=True, color_discrete_sequence=['#007bff'])
@@ -291,7 +293,6 @@ def student_tab_stats(student_id: int):
         st.error(f"Error loading stats: {e}")
     finally:
         conn.close()
-
 # --- Teacher Application Functions ---
 def teacher_tab_matrix():
     st.subheader("📅 Enterprise Attendance Matrix")
@@ -311,6 +312,78 @@ def teacher_tab_matrix():
             st.info("No students found in the system. Please add students first.")
             return
 
+        # 2. Fetch attendance for current month
+        cursor.execute("""
+            SELECT student_id, date, status 
+            FROM attendance 
+            WHERE date >= ? AND date <= ?
+        """, (start_date.strftime(DATE_FORMAT), today.strftime(DATE_FORMAT)))
+        attendance_records = cursor.fetchall()
+        
+        # 3. Pivot Data into Matrix
+        data = []
+        days_in_month = today.day # Only up to today
+        
+        # Map student_id to attendance for quick lookup
+        att_map = {}
+        for rec in attendance_records:
+            key = (rec['student_id'], rec['date'])
+            att_map[key] = rec['status']
+
+        for student in students:
+            row = {"Student Name": student['full_name']}
+            for day in range(1, days_in_month + 1):
+                date_str = f"{today.strftime('%Y-%m')}-{day:02d}"
+                status = att_map.get((student['id'], date_str), "N/A")
+                row[date_str] = status
+            data.append(row)
+        
+        df = pd.DataFrame(data)
+        
+        # 4. Display with Styler
+        def color_status(val):
+            color = 'white'
+            bg = 'white'
+            if val == 'Present':
+                bg = '#d4edda' 
+                color = 'black'
+            elif val == 'Absent':
+                bg = '#f8d7da' 
+                color = 'black'
+            elif val == 'Leave':
+                bg = '#fff3cd' 
+                color = 'black'
+            elif val == 'N/A':
+                bg = '#f8f9fa' 
+                color = '#6c757d'
+            return f'background-color: {bg}; color: {color}; text-align: center; font-weight: bold;'
+        
+        # THE FIX IS RIGHT HERE: applymap -> map
+        styled_df = df.style.map(color_status, subset=pd.IndexSlice[:, df.columns[1:]])
+        
+        st.dataframe(styled_df, use_container_width=True, height=600)
+        
+        # Summary Stats
+        st.markdown("### 📈 Class Summary for Current Month")
+        summary_data = {
+            "Metric": ["Total Students", "Days Passed", "Average Daily Attendance"],
+            "Value": [len(students), days_in_month, "Calculating..."]
+        }
+        daily_counts = {}
+        for rec in attendance_records:
+            d = rec['date']
+            if rec['status'] == 'Present':
+                daily_counts[d] = daily_counts.get(d, 0) + 1
+        total_present = sum(daily_counts.values())
+        daily_avg = round(total_present / (len(students) * days_in_month) * 100, 2) if days_in_month > 0 else 0
+        summary_data["Value"][2] = f"{daily_avg}%"
+        
+        st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
+        
+    except sqlite3.Error as e:
+        st.error(f"Error loading attendance matrix: {e}")
+    finally:
+        conn.close()
         # 2. Fetch attendance for current month
         cursor.execute("""
             SELECT student_id, date, status 
