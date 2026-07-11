@@ -498,7 +498,8 @@ def teacher_tab_insights():
             st.info("Insufficient data for generating insights.")
             return
             
-        df = pd.DataFrame(data)
+        # FIX: Explicit dict conversion before DataFrame construction (Prevents KeyError)
+        df = pd.DataFrame([dict(row) for row in data])
         df['attendance_rate'] = (df['present_count'] / df['total_records']) * 100
         
         fig = px.bar(df, x='date', y='attendance_rate', 
